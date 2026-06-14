@@ -205,5 +205,5 @@ Write-Host "  4. Optional — warm up the model (loads into VRAM, faster first g
 Write-Host "       npm run image:warm:sdnq" -ForegroundColor White
 Write-Host ""
 Write-Host "  Open Dungeon: http://localhost:3000"
-Write-Host "  In-app: set the Image Backend to 'sdnq-hs' in a chat's Settings panel."
+Write-Host "  In-app: set the Image Backend to sdnq-hs in each chat's Settings panel."
 Write-Host ""
