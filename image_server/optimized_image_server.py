@@ -417,7 +417,11 @@ def backend_command(
         )
         env = mflux_env(steps, backend)
     else:
-        cmd.extend(["--device", "mps", "--qchunk", "1024"])
+        # sdnq-hs: pure PyTorch — use CUDA on Windows/Linux, MPS on macOS.
+        # Override via SDNQ_DEVICE env var if needed.
+        default_device = "cuda" if _IS_WINDOWS else "mps"
+        device = os.environ.get("SDNQ_DEVICE", default_device)
+        cmd.extend(["--device", device, "--qchunk", "1024"])
 
     if reference_paths:
         cmd.extend(["--input-images", *[str(path) for path in reference_paths]])
@@ -622,7 +626,8 @@ class Handler(BaseHTTPRequestHandler):
                     "python": str(PYTHON),
                     "mfluxDir": str(MFLUX_DIR),
                     "backends": {
-                        "mflux-hs": MFLUX_DIR.exists(),
+                        # mflux-hs requires MLX — macOS only
+                        "mflux-hs": not _IS_WINDOWS and MFLUX_DIR.exists(),
                         "sdnq-hs": PYTHON.exists() and GENERATE.exists(),
                     },
                 },
@@ -630,24 +635,27 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/backends":
+            available_backends = []
+            # mflux-hs requires MLX — macOS only
+            if not _IS_WINDOWS:
+                available_backends.append({
+                    "id": "mflux-hs",
+                    "label": MFLUX_BACKEND_CONFIGS["mflux-hs"]["label"],
+                    "model": BACKENDS["mflux-hs"],
+                    "referenceLimit": 2,
+                })
+            sdnq_device = os.environ.get("SDNQ_DEVICE", "cuda" if _IS_WINDOWS else "mps")
+            available_backends.append({
+                "id": "sdnq-hs",
+                "label": f"PyTorch SDNQ uncensored HS ({sdnq_device.upper()})",
+                "model": BACKENDS["sdnq-hs"],
+                "referenceLimit": 2,
+            })
             json_response(
                 self,
                 200,
                 {
-                    "backends": [
-                        {
-                            "id": "mflux-hs",
-                            "label": MFLUX_BACKEND_CONFIGS["mflux-hs"]["label"],
-                            "model": BACKENDS["mflux-hs"],
-                            "referenceLimit": 2,
-                        },
-                        {
-                            "id": "sdnq-hs",
-                            "label": "PyTorch SDNQ uncensored HS",
-                            "model": BACKENDS["sdnq-hs"],
-                            "referenceLimit": 2,
-                        },
-                    ],
+                    "backends": available_backends,
                     "aspects": ["square", "portrait", "landscape"],
                     "defaults": {"longSide": 1024, "steps": 4, "guidance": 0.0},
                     "sizes": [

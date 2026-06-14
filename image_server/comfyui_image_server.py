@@ -59,8 +59,11 @@ COMFYUI_URL = os.environ.get("COMFYUI_URL", "http://127.0.0.1:8188").rstrip("/")
 
 # Model filenames inside ComfyUI's model directories.
 # Override these in .env.local if your files have different names.
-UNET_MODEL = os.environ.get("COMFYUI_UNET_MODEL", "flux2-klein-4b-q4_k_m.gguf")
-CLIP1_MODEL = os.environ.get("COMFYUI_CLIP1_MODEL", "t5xxl_uncensored_q4_k_m.gguf")
+# These filenames must match what's in your ComfyUI models/ directories.
+# The FLUX.2-klein model is from black-forest-labs/FLUX.2-klein-4B (gated).
+# The uncensored text encoder GGUF is from ponpoke/flux2-klein-4b-uncensored-text-encoder (gated).
+UNET_MODEL = os.environ.get("COMFYUI_UNET_MODEL", "flux2-klein-4b-Q4_K_M.gguf")
+CLIP1_MODEL = os.environ.get("COMFYUI_CLIP1_MODEL", "flux2-klein-4b-uncensored-q4_k_m.gguf")
 CLIP2_MODEL = os.environ.get("COMFYUI_CLIP2_MODEL", "clip_l.safetensors")
 VAE_MODEL = os.environ.get("COMFYUI_VAE_MODEL", "ae.safetensors")
 

@@ -1,251 +1,185 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Sets up ComfyUI + GGUF nodes for Open Dungeon image generation on Windows.
+    Sets up ultra-fast-image-gen with CUDA support for Open Dungeon image
+    generation on Windows.
 
 .DESCRIPTION
-    Downloads and configures:
-      - ComfyUI (portable or git clone)
-      - ComfyUI-GGUF custom nodes (for loading GGUF-quantised models)
-      - Model files: FLUX.2-klein GGUF unet, uncensored T5 GGUF, CLIP-L, VAE
+    Clones ultra-fast-image-gen, creates a Python venv, installs PyTorch with
+    CUDA, installs dependencies, and generates the .env.local configuration.
 
-    After running this script, start ComfyUI then start the image server:
-      python ComfyUI\main.py --listen 127.0.0.1 --port 8188
-      npm run image:server
+    After running this script:
+      npm run image:server    ← starts the image server (sdnq-hs backend, CUDA)
+      npm run image:warm:mflux ← warms up the model on first use
 
 .PARAMETER InstallDir
-    Where to install ComfyUI. Default: $HOME\ComfyUI
+    Where to clone/find ultra-fast-image-gen. Default: $HOME\ultra-fast-image-gen
 
 .PARAMETER HfToken
-    Hugging Face token for gated repos (required for the uncensored GGUF model).
-    Get one from https://huggingface.co/settings/tokens
+    Hugging Face token — required for the gated uncensored text encoder.
+    Get one at https://huggingface.co/settings/tokens, then request access to:
+      https://huggingface.co/ponpoke/flux2-klein-4b-uncensored-text-encoder
     Can also be set via the HF_TOKEN environment variable.
 
-.PARAMETER SkipModelDownload
-    Skip downloading model weights (if you already have them and want to symlink
-    or copy manually). Script will print the expected paths.
+.PARAMETER CudaVersion
+    PyTorch CUDA index suffix, e.g. "cu126" for CUDA 12.6 (default).
+    Check https://pytorch.org for your driver's compatible version.
 
 .EXAMPLE
-    # Full install with automatic model download
     .\scripts\setup-windows-images.ps1 -HfToken hf_xxxx
 
 .EXAMPLE
-    # Install ComfyUI only, download models later
-    .\scripts\setup-windows-images.ps1 -SkipModelDownload
+    .\scripts\setup-windows-images.ps1 -HfToken hf_xxxx -CudaVersion cu121
 
 .NOTES
     Requirements:
-      - Python 3.11 or 3.12 on PATH  (python --version)
-      - Git on PATH                   (git --version)
-      - NVIDIA GPU with CUDA 12+      (nvidia-smi)
-      - 12 GB+ free disk space for model files
+      - Python 3.11 or 3.12 on PATH   (python --version)
+      - Git on PATH                    (git --version)
+      - NVIDIA GPU with CUDA 12+       (nvidia-smi)
+      - ~12 GB free disk space
 #>
 
 [CmdletBinding()]
 param(
-    [string]$InstallDir = "$HOME\ComfyUI",
+    [string]$InstallDir = "$HOME\ultra-fast-image-gen",
     [string]$HfToken = $env:HF_TOKEN,
-    [switch]$SkipModelDownload
+    [string]$CudaVersion = "cu126"
 )
 
 $ErrorActionPreference = "Stop"
-$ProgressPreference = "SilentlyContinue"  # Speeds up Invoke-WebRequest
-
-# ── Helpers ──────────────────────────────────────────────────────────────────
+$ProgressPreference = "SilentlyContinue"
 
 function Write-Step([string]$msg) { Write-Host "`n==> $msg" -ForegroundColor Cyan }
 function Write-Ok([string]$msg)   { Write-Host "    OK: $msg" -ForegroundColor Green }
 function Write-Warn([string]$msg) { Write-Host "    WARN: $msg" -ForegroundColor Yellow }
-function Require-Command([string]$cmd, [string]$installHint) {
+
+function Require-Command([string]$cmd, [string]$hint) {
     if (-not (Get-Command $cmd -ErrorAction SilentlyContinue)) {
-        Write-Host "ERROR: '$cmd' not found on PATH." -ForegroundColor Red
-        Write-Host "       $installHint"
+        Write-Host "ERROR: '$cmd' not found on PATH. $hint" -ForegroundColor Red
         exit 1
     }
 }
 
-function Download-File([string]$url, [string]$dest, [string]$token = "") {
-    $headers = @{}
-    if ($token) { $headers["Authorization"] = "Bearer $token" }
-    Write-Host "    Downloading $(Split-Path $dest -Leaf)..."
-    Invoke-WebRequest -Uri $url -OutFile $dest -Headers $headers -UseBasicParsing
-}
-
-function HF-Download([string]$repo, [string]$filename, [string]$dest, [string]$token) {
-    $url = "https://huggingface.co/$repo/resolve/main/$filename"
-    Download-File $url $dest $token
-}
-
-# ── Pre-flight checks ─────────────────────────────────────────────────────────
+# ── Pre-flight ────────────────────────────────────────────────────────────────
 
 Write-Step "Checking prerequisites"
-Require-Command "python"  "Install Python 3.11+ from https://www.python.org/downloads/"
-Require-Command "git"     "Install Git from https://git-scm.com/"
+Require-Command "python" "Install Python 3.11+ from https://www.python.org/downloads/"
+Require-Command "git"    "Install Git from https://git-scm.com/"
 
-$pythonVersion = python --version 2>&1
-Write-Ok $pythonVersion
+$pyVer = python --version 2>&1
+Write-Ok $pyVer
 
-$gpuCheck = nvidia-smi 2>&1
-if ($LASTEXITCODE -ne 0) {
-    Write-Warn "nvidia-smi not found or failed. Image generation requires an NVIDIA GPU with CUDA 12+."
-    Write-Warn "Continuing anyway — you can install the GPU driver later."
-} else {
-    Write-Ok "NVIDIA GPU detected"
+$gpuOk = $false
+try {
+    $gpuInfo = nvidia-smi --query-gpu=name --format=csv,noheader 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        Write-Ok "GPU: $gpuInfo"
+        $gpuOk = $true
+    }
+} catch {}
+if (-not $gpuOk) {
+    Write-Warn "nvidia-smi not found. Image generation requires an NVIDIA GPU with CUDA 12+."
 }
 
-# ── ComfyUI install ───────────────────────────────────────────────────────────
+if (-not $HfToken) {
+    Write-Host ""
+    Write-Host "  WARNING: No Hugging Face token provided." -ForegroundColor Yellow
+    Write-Host "  The uncensored FLUX text encoder requires a gated HF repo."
+    Write-Host "  1. Get a token: https://huggingface.co/settings/tokens"
+    Write-Host "  2. Request access: https://huggingface.co/ponpoke/flux2-klein-4b-uncensored-text-encoder"
+    Write-Host "  3. Re-run: .\scripts\setup-windows-images.ps1 -HfToken hf_xxxx"
+    Write-Host ""
+    Write-Host "  Continuing without a token — models will download on first use" `
+        "(HF_TOKEN required for the uncensored encoder)." -ForegroundColor Yellow
+    Write-Host ""
+}
 
-Write-Step "Installing ComfyUI at $InstallDir"
+# ── Clone ultra-fast-image-gen ────────────────────────────────────────────────
+
+Write-Step "Setting up ultra-fast-image-gen at $InstallDir"
 
 if (-not (Test-Path "$InstallDir\.git")) {
-    git clone --depth 1 https://github.com/comfyanonymous/ComfyUI.git $InstallDir
-    Write-Ok "ComfyUI cloned"
+    git clone --depth 1 https://github.com/newideas99/ultra-fast-image-gen.git $InstallDir
+    Write-Ok "Repository cloned"
 } else {
-    Write-Ok "ComfyUI already present, pulling latest"
+    Write-Ok "Already present, pulling latest"
     git -C $InstallDir pull --ff-only
 }
 
-# Create and activate a venv inside ComfyUI
+# ── Python venv ───────────────────────────────────────────────────────────────
+
 $venvDir = "$InstallDir\.venv"
+$pip     = "$venvDir\Scripts\pip.exe"
+$python  = "$venvDir\Scripts\python.exe"
+
+Write-Step "Creating Python venv"
 if (-not (Test-Path "$venvDir\Scripts\python.exe")) {
-    Write-Step "Creating Python venv for ComfyUI"
     python -m venv $venvDir
-    Write-Ok "Venv created at $venvDir"
+    Write-Ok "Venv created"
+} else {
+    Write-Ok "Venv already exists"
 }
 
-$pip = "$venvDir\Scripts\pip.exe"
-$pythonExe = "$venvDir\Scripts\python.exe"
+# ── PyTorch with CUDA ─────────────────────────────────────────────────────────
 
-Write-Step "Installing ComfyUI dependencies (PyTorch CUDA 12.6)"
-# Install PyTorch with CUDA — adjust cu126 if your CUDA version differs
-& $pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126 --quiet
+Write-Step "Installing PyTorch with CUDA $CudaVersion"
+Write-Host "    (This can take several minutes on first run...)"
+& $pip install torch torchvision torchaudio `
+    --index-url "https://download.pytorch.org/whl/$CudaVersion" `
+    --quiet
+Write-Ok "PyTorch installed"
+
+# ── ultra-fast-image-gen dependencies ────────────────────────────────────────
+
+Write-Step "Installing ultra-fast-image-gen dependencies"
 & $pip install -r "$InstallDir\requirements.txt" --quiet
-Write-Ok "ComfyUI dependencies installed"
+Write-Ok "Dependencies installed"
 
-# ── ComfyUI-GGUF custom nodes ─────────────────────────────────────────────────
+# ── HF token ─────────────────────────────────────────────────────────────────
 
-Write-Step "Installing ComfyUI-GGUF custom nodes"
-$customNodesDir = "$InstallDir\custom_nodes"
-$ggufDir = "$customNodesDir\ComfyUI-GGUF"
-
-if (-not (Test-Path "$ggufDir\.git")) {
-    git clone --depth 1 https://github.com/city96/ComfyUI-GGUF.git $ggufDir
-    Write-Ok "ComfyUI-GGUF cloned"
-} else {
-    Write-Ok "ComfyUI-GGUF already present"
-    git -C $ggufDir pull --ff-only
-}
-
-if (Test-Path "$ggufDir\requirements.txt") {
-    & $pip install -r "$ggufDir\requirements.txt" --quiet
-    Write-Ok "ComfyUI-GGUF requirements installed"
-}
-
-# ── Model directories ─────────────────────────────────────────────────────────
-
-$unetDir   = "$InstallDir\models\unet"
-$clipDir   = "$InstallDir\models\text_encoders"
-$vaeDir    = "$InstallDir\models\vae"
-
-foreach ($dir in @($unetDir, $clipDir, $vaeDir)) {
-    New-Item -ItemType Directory -Force -Path $dir | Out-Null
-}
-
-# ── Model downloads ───────────────────────────────────────────────────────────
-
-if ($SkipModelDownload) {
-    Write-Step "Skipping model downloads (--SkipModelDownload)"
-    Write-Host ""
-    Write-Host "Place the following files in these directories:" -ForegroundColor Yellow
-    Write-Host "  FLUX.2-klein unet GGUF  →  $unetDir\flux2-klein-4b-q4_k_m.gguf"
-    Write-Host "  Uncensored T5 GGUF      →  $clipDir\t5xxl_uncensored_q4_k_m.gguf"
-    Write-Host "  CLIP-L                  →  $clipDir\clip_l.safetensors"
-    Write-Host "  FLUX VAE                →  $vaeDir\ae.safetensors"
-    Write-Host ""
-} else {
-    if (-not $HfToken) {
-        Write-Host ""
-        Write-Host "WARNING: No Hugging Face token provided." -ForegroundColor Yellow
-        Write-Host "         The uncensored GGUF text encoder lives in a gated repo."
-        Write-Host "         Get a token from https://huggingface.co/settings/tokens"
-        Write-Host "         then re-run with: -HfToken hf_xxxx"
-        Write-Host "         or set: `$env:HF_TOKEN = 'hf_xxxx'"
-        Write-Host ""
-        Write-Host "         Continuing with public models only..."
-        Write-Host ""
+if ($HfToken) {
+    Write-Step "Configuring Hugging Face token"
+    $envFilePath = "$InstallDir\.env"
+    if (Test-Path $envFilePath) {
+        $existing = Get-Content $envFilePath
+        if ($existing -notmatch "HF_TOKEN=") {
+            Add-Content $envFilePath "`nHF_TOKEN=$HfToken"
+            Write-Ok "HF_TOKEN added to $envFilePath"
+        } else {
+            Write-Ok "HF_TOKEN already set in $envFilePath"
+        }
+    } else {
+        Set-Content $envFilePath "HF_TOKEN=$HfToken"
+        Write-Ok "Created $envFilePath with HF_TOKEN"
     }
-
-    Write-Step "Downloading model files"
-
-    # FLUX VAE (public)
-    $vaeDest = "$vaeDir\ae.safetensors"
-    if (-not (Test-Path $vaeDest)) {
-        HF-Download "black-forest-labs/FLUX.1-schnell" "ae.safetensors" $vaeDest ""
-    } else { Write-Ok "VAE already present" }
-
-    # CLIP-L (public)
-    $clipLDest = "$clipDir\clip_l.safetensors"
-    if (-not (Test-Path $clipLDest)) {
-        HF-Download "comfyanonymous/flux_text_encoders" "clip_l.safetensors" $clipLDest ""
-    } else { Write-Ok "CLIP-L already present" }
-
-    # FLUX.2-klein 4B unet GGUF — gated repo, needs HF token
-    $unetDest = "$unetDir\flux2-klein-4b-q4_k_m.gguf"
-    if (-not (Test-Path $unetDest)) {
-        if ($HfToken) {
-            Write-Host "    Downloading FLUX.2-klein 4B unet (~3-4 GB)..."
-            # NOTE: Update this repo/filename once the model's official HF location is confirmed.
-            # The model is distributed via ultra-fast-image-gen; check that repo's README for
-            # the current download source.
-            Write-Warn "FLUX.2-klein unet: check ultra-fast-image-gen README for the HF repo name."
-            Write-Warn "Then place the GGUF file at: $unetDest"
-            Write-Warn "Or set COMFYUI_UNET_MODEL in .env.local to match your filename."
-        } else {
-            Write-Warn "Skipping FLUX.2-klein unet download (no HF token). Place it manually at:"
-            Write-Warn "  $unetDest"
-        }
-    } else { Write-Ok "FLUX.2-klein unet already present" }
-
-    # Uncensored T5 GGUF — gated repo, needs HF token + approval
-    $t5Dest = "$clipDir\t5xxl_uncensored_q4_k_m.gguf"
-    if (-not (Test-Path $t5Dest)) {
-        if ($HfToken) {
-            Write-Host "    Downloading uncensored T5 GGUF text encoder..."
-            Write-Warn "Uncensored T5: check ultra-fast-image-gen README for the gated HF repo."
-            Write-Warn "Then place the GGUF file at: $t5Dest"
-            Write-Warn "Or set COMFYUI_CLIP1_MODEL in .env.local to match your filename."
-        } else {
-            Write-Warn "Skipping uncensored T5 download (no HF token). Place it manually at:"
-            Write-Warn "  $t5Dest"
-        }
-    } else { Write-Ok "Uncensored T5 GGUF already present" }
 }
 
-# ── env.local snippet ─────────────────────────────────────────────────────────
+# ── .env.local for Open Dungeon ───────────────────────────────────────────────
 
-Write-Step "Writing .env.local snippet"
-$envSnippet = @"
+Write-Step "Writing Open Dungeon .env.local"
 
-# --- Open Dungeon Windows image generation (ComfyUI) ---
+$installDirForwardSlash = $InstallDir -replace '\\', '/'
+$pythonForwardSlash = $python -replace '\\', '/'
+
+$snippet = @"
+
+# --- Windows image generation (ultra-fast-image-gen + CUDA) ---
 # Added by setup-windows-images.ps1 on $(Get-Date -Format 'yyyy-MM-dd')
-COMFYUI_URL=http://127.0.0.1:8188
-COMFYUI_PYTHON=$pythonExe
-COMFYUI_UNET_MODEL=flux2-klein-4b-q4_k_m.gguf
-COMFYUI_CLIP1_MODEL=t5xxl_uncensored_q4_k_m.gguf
-COMFYUI_CLIP2_MODEL=clip_l.safetensors
-COMFYUI_VAE_MODEL=ae.safetensors
+ULTRA_FAST_IMAGE_GEN_DIR=$installDirForwardSlash
+ULTRA_FAST_IMAGE_GEN_PYTHON=$pythonForwardSlash
+# sdnq-hs backend uses CUDA automatically on Windows (no extra config needed)
 "@
 
 $envLocalPath = Join-Path (Split-Path $PSScriptRoot -Parent) ".env.local"
 if (Test-Path $envLocalPath) {
-    Add-Content -Path $envLocalPath -Value $envSnippet
+    Add-Content $envLocalPath $snippet
     Write-Ok "Appended to existing .env.local"
 } else {
-    Set-Content -Path $envLocalPath -Value $envSnippet.TrimStart()
+    Set-Content $envLocalPath $snippet.TrimStart()
     Write-Ok "Created .env.local"
 }
 
-# ── Final instructions ────────────────────────────────────────────────────────
+# ── Summary ───────────────────────────────────────────────────────────────────
 
 Write-Host ""
 Write-Host "=====================================================================" -ForegroundColor Green
@@ -254,17 +188,22 @@ Write-Host "====================================================================
 Write-Host ""
 Write-Host "Next steps:"
 Write-Host ""
-Write-Host "  1. Make sure all model files are in place (see warnings above if any)."
+Write-Host "  1. Start Open Dungeon (Terminal 1):"
+Write-Host "       npm run dev" -ForegroundColor White
 Write-Host ""
-Write-Host "  2. Start ComfyUI (keep this terminal open):"
-Write-Host "       $pythonExe $InstallDir\main.py --listen 127.0.0.1 --port 8188" -ForegroundColor White
+Write-Host "  2. Start the image server (Terminal 2):"
+Write-Host "       npm run image:server" -ForegroundColor White
+Write-Host "     The sdnq-hs backend will use CUDA automatically."
 Write-Host ""
-Write-Host "  3. In a new terminal, start Open Dungeon:"
-Write-Host "       npm run dev           (dev mode)"
-Write-Host "       npm run image:server  (image generation server)" -ForegroundColor White
+Write-Host "  3. On first image request, the FLUX.2-klein model and uncensored"
+Write-Host "     text encoder will download from Hugging Face (~7-10 GB)."
+if (-not $HfToken) {
+    Write-Host "     NOTE: Set HF_TOKEN in .env.local for the uncensored text encoder." -ForegroundColor Yellow
+}
 Write-Host ""
-Write-Host "  4. Open http://localhost:3000 and start playing."
+Write-Host "  4. Optional — warm up the model (loads into VRAM, faster first gen):"
+Write-Host "       npm run image:warm:mflux" -ForegroundColor White
 Write-Host ""
-Write-Host "  For a warm-up generation (loads model into VRAM):"
-Write-Host "       npm run image:warm:mflux  (also works on Windows now)"
+Write-Host "  Open Dungeon: http://localhost:3000"
+Write-Host "  In-app: set the Image Backend to 'sdnq-hs' in a chat's Settings panel."
 Write-Host ""
