@@ -26,7 +26,9 @@ export const dynamic = "force-dynamic";
 
 // StreamElements and StreamLabs both send slightly different shapes.
 // We normalize them before processing.
-const streamElementsSchema = z.object({
+
+// Tips / monetary donations
+const streamElementsTipSchema = z.object({
   type: z.literal("tip"),
   data: z.object({
     username: z.string(),
@@ -36,7 +38,7 @@ const streamElementsSchema = z.object({
   }),
 });
 
-const streamLabsSchema = z.object({
+const streamLabsDonationSchema = z.object({
   type: z.literal("donation"),
   message: z.array(
     z.object({
@@ -48,47 +50,201 @@ const streamLabsSchema = z.object({
   ),
 });
 
+// Subscriptions (StreamElements)
+const streamElementsSubSchema = z.object({
+  type: z.union([z.literal("subscriber"), z.literal("resub"), z.literal("giftsub")]),
+  data: z.object({
+    displayName: z.string().optional(),
+    username: z.string().optional(),
+    gifterDisplayName: z.string().optional(),
+    gifterUsername: z.string().optional(),
+    amount: z.number().optional(),    // giftsub: number of gifted subs
+    message: z.string().optional().default(""),
+    tier: z.string().optional(),      // "1000" | "2000" | "3000"
+  }),
+});
+
+// Bits (StreamElements)
+const streamElementsBitsSchema = z.object({
+  type: z.literal("cheer"),
+  data: z.object({
+    displayName: z.string().optional(),
+    username: z.string().optional(),
+    amount: z.number(),
+    message: z.string().optional().default(""),
+  }),
+});
+
+// Bits (StreamLabs)
+const streamLabsBitsSchema = z.object({
+  type: z.literal("bits"),
+  message: z.array(
+    z.object({
+      name: z.string(),
+      amount: z.string().or(z.number()),
+      message: z.string().optional().default(""),
+    }),
+  ),
+});
+
+// StreamLabs subscriptions
+const streamLabsSubSchema = z.object({
+  type: z.union([z.literal("subscription"), z.literal("resub"), z.literal("giftsub")]),
+  message: z.array(
+    z.object({
+      name: z.string(),
+      displayName: z.string().optional(),
+      gifterName: z.string().optional(),
+      months: z.number().optional(),
+      message: z.string().optional().default(""),
+      sub_plan: z.string().optional(),
+    }),
+  ),
+});
+
+type DonationEventKind = "tip" | "sub" | "bits";
+
 type DonationEvent = {
+  kind: DonationEventKind;
   username: string;
+  /** USD-equivalent amount; for bits/subs, converted via BITS_TO_USD_RATE */
   amount: number;
   currency: string;
   message: string;
+  /** Raw bits or sub count before conversion */
+  rawAmount?: number;
 };
 
+function bitsToUsd(bits: number): number {
+  const rate = parseFloat(serverEnv("BITS_TO_USD_RATE", "0.01") || "0.01");
+  return bits * rate;
+}
+
+function subTierToUsd(tier: string | undefined, count: number = 1): number {
+  // Twitch sub tiers: 1000=$4.99, 2000=$9.99, 3000=$24.99 (broadcaster gets ~50%)
+  const tierValues: Record<string, number> = { "1000": 4.99, "2000": 9.99, "3000": 24.99 };
+  return (tierValues[tier ?? "1000"] ?? 4.99) * count;
+}
+
 function parseBody(body: unknown): DonationEvent | null {
-  // Try StreamElements format
-  const se = streamElementsSchema.safeParse(body);
+  // StreamElements tip
+  const se = streamElementsTipSchema.safeParse(body);
   if (se.success) {
     return {
+      kind: "tip",
       username: se.data.data.username,
       amount: se.data.data.amount,
       currency: se.data.data.currency || "USD",
       message: se.data.data.message || "",
     };
   }
-  // Try StreamLabs format
-  const sl = streamLabsSchema.safeParse(body);
+
+  // StreamLabs donation
+  const sl = streamLabsDonationSchema.safeParse(body);
   if (sl.success && sl.data.message.length > 0) {
     const msg = sl.data.message[0];
     return {
+      kind: "tip",
       username: msg.name,
       amount: Number(msg.amount),
       currency: msg.currency || "USD",
       message: msg.message || "",
     };
   }
+
+  // StreamElements bits/cheer
+  const seBits = streamElementsBitsSchema.safeParse(body);
+  if (seBits.success) {
+    const bits = seBits.data.data.amount;
+    return {
+      kind: "bits",
+      username: seBits.data.data.displayName || seBits.data.data.username || "anonymous",
+      amount: bitsToUsd(bits),
+      currency: "USD",
+      message: seBits.data.data.message || "",
+      rawAmount: bits,
+    };
+  }
+
+  // StreamLabs bits
+  const slBits = streamLabsBitsSchema.safeParse(body);
+  if (slBits.success && slBits.data.message.length > 0) {
+    const msg = slBits.data.message[0];
+    const bits = Number(msg.amount);
+    return {
+      kind: "bits",
+      username: msg.name,
+      amount: bitsToUsd(bits),
+      currency: "USD",
+      message: msg.message || "",
+      rawAmount: bits,
+    };
+  }
+
+  // StreamElements subscriber / resub / giftsub
+  const seSub = streamElementsSubSchema.safeParse(body);
+  if (seSub.success) {
+    const d = seSub.data.data;
+    const isGift = seSub.data.type === "giftsub";
+    const username = isGift
+      ? (d.gifterDisplayName || d.gifterUsername || "anonymous")
+      : (d.displayName || d.username || "anonymous");
+    const count = isGift ? (d.amount || 1) : 1;
+    return {
+      kind: "sub",
+      username,
+      amount: subTierToUsd(d.tier, count),
+      currency: "USD",
+      message: d.message || "",
+      rawAmount: count,
+    };
+  }
+
+  // StreamLabs subscription
+  const slSub = streamLabsSubSchema.safeParse(body);
+  if (slSub.success && slSub.data.message.length > 0) {
+    const msg = slSub.data.message[0];
+    const isGift = slSub.data.type === "giftsub";
+    const username = isGift ? (msg.gifterName || msg.name) : msg.name;
+    return {
+      kind: "sub",
+      username,
+      amount: subTierToUsd(msg.sub_plan, 1),
+      currency: "USD",
+      message: msg.message || "",
+      rawAmount: 1,
+    };
+  }
+
   return null;
 }
 
 function buildStoryInjection(event: DonationEvent): string {
-  const { username, amount, currency, message } = event;
+  const { kind, username, amount, currency, message, rawAmount } = event;
 
   if (message.trim()) {
-    // Donor left a message — inject it as a story directive
-    return `[Donation from ${username} (${amount} ${currency}): ${message.trim()}]`;
+    const label =
+      kind === "bits" ? `${rawAmount} Bits from ${username}`
+      : kind === "sub" ? `Sub gift from ${username}`
+      : `Donation from ${username} (${amount} ${currency})`;
+    return `[${label}: ${message.trim()}]`;
   }
 
-  // Tiered default events when no message
+  if (kind === "bits") {
+    const bits = rawAmount ?? 0;
+    if (bits >= 5000) return `[${username} cheered ${bits} Bits — something dramatic and pivotal happens!]`;
+    if (bits >= 1000) return `[${username} cheered ${bits} Bits — add an unexpected twist to the scene.]`;
+    return `[${username} cheered ${bits} Bits — add a small surprising detail.]`;
+  }
+
+  if (kind === "sub") {
+    const count = rawAmount ?? 1;
+    if (count >= 10) return `[${username} gifted ${count} subscriptions — something dramatic and pivotal happens!]`;
+    if (count >= 3) return `[${username} gifted ${count} subscriptions — add an unexpected twist to the scene.]`;
+    return `[${username} subscribed — add a small surprising detail.]`;
+  }
+
+  // Monetary tip — tiered default events
   if (amount >= 50) {
     return `[A major patron, ${username}, blesses the story — something dramatic and pivotal happens.]`;
   }
@@ -125,13 +281,16 @@ export async function POST(request: Request) {
     return Response.json({ ok: true, processed: false });
   }
 
-  const minAmount = parseFloat(serverEnv("DONATION_MIN_AMOUNT", "1") || "1");
-  const expectedCurrency = serverEnv("DONATION_CURRENCY", "");
-  if (event.amount < minAmount) {
-    return Response.json({ ok: true, processed: false, reason: "Below minimum amount." });
-  }
-  if (expectedCurrency && event.currency !== expectedCurrency) {
-    return Response.json({ ok: true, processed: false, reason: "Currency mismatch." });
+  // Subscriptions always pass the amount check regardless of DONATION_MIN_AMOUNT
+  if (event.kind !== "sub") {
+    const minAmount = parseFloat(serverEnv("DONATION_MIN_AMOUNT", "1") || "1");
+    const expectedCurrency = serverEnv("DONATION_CURRENCY", "");
+    if (event.amount < minAmount) {
+      return Response.json({ ok: true, processed: false, reason: "Below minimum amount." });
+    }
+    if (expectedCurrency && event.currency !== expectedCurrency) {
+      return Response.json({ ok: true, processed: false, reason: "Currency mismatch." });
+    }
   }
 
   const state = getStreamState();
