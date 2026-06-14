@@ -9,14 +9,14 @@
     CUDA, installs dependencies, and generates the .env.local configuration.
 
     After running this script:
-      npm run image:server    ← starts the image server (sdnq-hs backend, CUDA)
-      npm run image:warm:sdnq  ← warms up the model on first use
+      npm run image:server     - starts the image server (sdnq-hs backend, CUDA)
+      npm run image:warm:sdnq  - warms up the model on first use
 
 .PARAMETER InstallDir
     Where to clone/find ultra-fast-image-gen. Default: $HOME\ultra-fast-image-gen
 
 .PARAMETER HfToken
-    Hugging Face token — required for the gated uncensored text encoder.
+    Hugging Face token - required for the gated uncensored text encoder.
     Get one at https://huggingface.co/settings/tokens, then request access to:
       https://huggingface.co/ponpoke/flux2-klein-4b-uncensored-text-encoder
     Can also be set via the HF_TOKEN environment variable.
@@ -60,7 +60,7 @@ function Require-Command([string]$cmd, [string]$hint) {
     }
 }
 
-# ── Pre-flight ────────────────────────────────────────────────────────────────
+# -- Pre-flight ----------------------------------------------------------------
 
 Write-Step "Checking prerequisites"
 Require-Command "python" "Install Python 3.11+ from https://www.python.org/downloads/"
@@ -89,12 +89,12 @@ if (-not $HfToken) {
     Write-Host "  2. Request access: https://huggingface.co/ponpoke/flux2-klein-4b-uncensored-text-encoder"
     Write-Host "  3. Re-run: .\scripts\setup-windows-images.ps1 -HfToken hf_xxxx"
     Write-Host ""
-    Write-Host "  Continuing without a token — models will download on first use" `
+    Write-Host "  Continuing without a token - models will download on first use" `
         "(HF_TOKEN required for the uncensored encoder)." -ForegroundColor Yellow
     Write-Host ""
 }
 
-# ── Clone ultra-fast-image-gen ────────────────────────────────────────────────
+# -- Clone ultra-fast-image-gen -----------------------------------------------
 
 Write-Step "Setting up ultra-fast-image-gen at $InstallDir"
 
@@ -106,7 +106,7 @@ if (-not (Test-Path "$InstallDir\.git")) {
     git -C $InstallDir pull --ff-only
 }
 
-# ── Python venv ───────────────────────────────────────────────────────────────
+# -- Python venv --------------------------------------------------------------
 
 $venvDir = "$InstallDir\.venv"
 $pip     = "$venvDir\Scripts\pip.exe"
@@ -120,7 +120,7 @@ if (-not (Test-Path "$venvDir\Scripts\python.exe")) {
     Write-Ok "Venv already exists"
 }
 
-# ── PyTorch with CUDA ─────────────────────────────────────────────────────────
+# -- PyTorch with CUDA --------------------------------------------------------
 
 Write-Step "Installing PyTorch with CUDA $CudaVersion"
 Write-Host "    (This can take several minutes on first run...)"
@@ -129,13 +129,13 @@ Write-Host "    (This can take several minutes on first run...)"
     --quiet
 Write-Ok "PyTorch installed"
 
-# ── ultra-fast-image-gen dependencies ────────────────────────────────────────
+# -- ultra-fast-image-gen dependencies ----------------------------------------
 
 Write-Step "Installing ultra-fast-image-gen dependencies"
 & $pip install -r "$InstallDir\requirements.txt" --quiet
 Write-Ok "Dependencies installed"
 
-# ── HF token ─────────────────────────────────────────────────────────────────
+# -- HF token -----------------------------------------------------------------
 
 if ($HfToken) {
     Write-Step "Configuring Hugging Face token"
@@ -154,17 +154,18 @@ if ($HfToken) {
     }
 }
 
-# ── .env.local for Open Dungeon ───────────────────────────────────────────────
+# -- .env.local for Open Dungeon ----------------------------------------------
 
 Write-Step "Writing Open Dungeon .env.local"
 
 $installDirForwardSlash = $InstallDir -replace '\\', '/'
 $pythonForwardSlash = $python -replace '\\', '/'
+$today = Get-Date -Format 'yyyy-MM-dd'
 
 $snippet = @"
 
 # --- Windows image generation (ultra-fast-image-gen + CUDA) ---
-# Added by setup-windows-images.ps1 on $(Get-Date -Format 'yyyy-MM-dd')
+# Added by setup-windows-images.ps1 on $today
 ULTRA_FAST_IMAGE_GEN_DIR=$installDirForwardSlash
 ULTRA_FAST_IMAGE_GEN_PYTHON=$pythonForwardSlash
 # sdnq-hs backend uses CUDA automatically on Windows (no extra config needed)
@@ -179,7 +180,7 @@ if (Test-Path $envLocalPath) {
     Write-Ok "Created .env.local"
 }
 
-# ── Summary ───────────────────────────────────────────────────────────────────
+# -- Summary ------------------------------------------------------------------
 
 Write-Host ""
 Write-Host "=====================================================================" -ForegroundColor Green
@@ -201,9 +202,9 @@ if (-not $HfToken) {
     Write-Host "     NOTE: Set HF_TOKEN in .env.local for the uncensored text encoder." -ForegroundColor Yellow
 }
 Write-Host ""
-Write-Host "  4. Optional — warm up the model (loads into VRAM, faster first gen):"
+Write-Host "  4. Optional - warm up the model (loads into VRAM, faster first gen):"
 Write-Host "       npm run image:warm:sdnq" -ForegroundColor White
 Write-Host ""
 Write-Host "  Open Dungeon: http://localhost:3000"
-Write-Host "  In-app: set the Image Backend to sdnq-hs in each chat's Settings panel."
+Write-Host "  In-app: set the Image Backend to sdnq-hs in each chat Settings panel."
 Write-Host ""
