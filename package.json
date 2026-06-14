@@ -14,12 +14,14 @@
     "image:server": "node scripts/image-server.mjs",
     "image:warm:mflux": "node scripts/warm.mjs mflux-hs",
     "image:warm:sdnq": "node scripts/warm.mjs sdnq-hs",
-    "flux:worker": "npm run image:server"
+    "flux:worker": "npm run image:server",
+    "stream:bot": "node twitch-bot/bot.mjs"
   },
   "dependencies": {
     "@radix-ui/react-alert-dialog": "^1.1.15",
     "@radix-ui/react-dialog": "^1.1.16",
     "better-sqlite3": "^12.10.0",
+    "tmi.js": "^1.8.5",
     "clsx": "^2.1.1",
     "lucide-react": "^1.16.0",
     "next": "16.2.6",
