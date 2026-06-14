@@ -90,7 +90,7 @@ function StoryPassage({ message, isLatest }: { message: Message; isLatest: boole
         <img
           src={message.imageUrl}
           alt=""
-          className="rounded-md mb-2 max-h-48 object-cover w-full"
+          className="rounded-md mb-2 max-h-64 w-full object-contain"
         />
       )}
       <p

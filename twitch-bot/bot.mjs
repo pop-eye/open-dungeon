@@ -41,11 +41,13 @@ import { fileURLToPath } from "node:url";
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 
-// Load .env from twitch-bot/.env (simple parser, no dotenv dependency)
-function loadEnv() {
-  const envPath = join(__dir, ".env");
-  if (!existsSync(envPath)) return;
-  for (const line of readFileSync(envPath, "utf8").split(/\r?\n/)) {
+// Load env files — simple parser, no dotenv dependency.
+// Resolution order (later files win, but existing process.env always wins):
+//   1. project root .env.local  — shared secrets (STREAM_API_SECRET, etc.)
+//   2. twitch-bot/.env          — bot-specific overrides
+function parseEnvFile(filePath) {
+  if (!existsSync(filePath)) return;
+  for (const line of readFileSync(filePath, "utf8").split(/\r?\n/)) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("#")) continue;
     const sep = trimmed.indexOf("=");
@@ -57,6 +59,12 @@ function loadEnv() {
     }
     if (!process.env[key]) process.env[key] = val;
   }
+}
+
+function loadEnv() {
+  // Root .env.local first (lower priority — bot's own .env can override)
+  parseEnvFile(join(__dir, "..", ".env.local"));
+  parseEnvFile(join(__dir, ".env"));
 }
 loadEnv();
 

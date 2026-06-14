@@ -33,7 +33,8 @@ StreamElements / StreamLabs
 Add to your `.env.local`:
 
 ```env
-# Required — must match STREAM_API_SECRET in twitch-bot/.env
+# Pick a long random string — the bot reads this automatically from .env.local,
+# so you only need to set it once here.
 STREAM_API_SECRET=some-long-random-secret-string
 
 # Needed so the turn route can call /api/story internally
@@ -48,14 +49,15 @@ NEXTAUTH_URL=http://localhost:3000
 cp twitch-bot/.env.example twitch-bot/.env
 ```
 
-Edit `twitch-bot/.env`:
+Edit `twitch-bot/.env` — only the Twitch credentials are required here.
+`STREAM_API_SECRET` is read automatically from the project root `.env.local`:
 
 ```env
 TWITCH_BOT_USERNAME=YourBotAccount
 TWITCH_BOT_OAUTH_TOKEN=oauth:xxxxxxxxxxxxxxxxxxxxxxxx
 TWITCH_CHANNEL=YourChannelName
 OPEN_DUNGEON_URL=http://localhost:3000
-STREAM_API_SECRET=some-long-random-secret-string   # must match .env.local
+# STREAM_API_SECRET — leave blank; auto-loaded from ../.env.local
 ```
 
 Get the OAuth token at https://twitchapps.com/tmi/ — log in as the **bot account**

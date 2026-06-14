@@ -112,7 +112,7 @@ automatically. On first image request, models download from Hugging Face (~7-10 
 
 **Warm up** (loads models into VRAM for faster first generation):
 ```powershell
-npm run image:warm:mflux
+npm run image:warm:sdnq
 ```
 
 ### In-app setting
