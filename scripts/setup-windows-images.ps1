@@ -10,7 +10,7 @@
 
     After running this script:
       npm run image:server    ← starts the image server (sdnq-hs backend, CUDA)
-      npm run image:warm:mflux ← warms up the model on first use
+      npm run image:warm:sdnq  ← warms up the model on first use
 
 .PARAMETER InstallDir
     Where to clone/find ultra-fast-image-gen. Default: $HOME\ultra-fast-image-gen
@@ -202,7 +202,7 @@ if (-not $HfToken) {
 }
 Write-Host ""
 Write-Host "  4. Optional — warm up the model (loads into VRAM, faster first gen):"
-Write-Host "       npm run image:warm:mflux" -ForegroundColor White
+Write-Host "       npm run image:warm:sdnq" -ForegroundColor White
 Write-Host ""
 Write-Host "  Open Dungeon: http://localhost:3000"
 Write-Host "  In-app: set the Image Backend to 'sdnq-hs' in a chat's Settings panel."
