@@ -86,7 +86,14 @@ MFLUX_RESIDENT_ENABLED = os.environ.get("MFLUX_RESIDENT", "1") not in (
     "false",
     "False",
 )
+SDNQ_RESIDENT_ENABLED = os.environ.get("SDNQ_RESIDENT", "1") not in (
+    "",
+    "0",
+    "false",
+    "False",
+)
 MFLUX_WORKER = Path(__file__).resolve().parent / "mflux_resident_worker.py"
+SDNQ_WORKER = Path(__file__).resolve().parent / "sdnq_resident_worker.py"
 
 
 @dataclass(frozen=True)
@@ -302,6 +309,119 @@ class MfluxResident:
 MFLUX_RESIDENT = MfluxResident()
 
 
+class SdnqResident:
+    """Keeps the PyTorch/SDNQ FLUX pipeline alive between requests.
+
+    Uses the same JSON-line IPC protocol as MfluxResident so the server logic
+    stays symmetric. The worker runs under the ultra-fast-image-gen venv Python
+    rather than uv, which is the same interpreter used for subprocess generation.
+    """
+
+    def __init__(self) -> None:
+        self.proc: subprocess.Popen[str] | None = None
+        self.lock = threading.Lock()
+        self.last_stderr = ""
+
+    def is_running(self) -> bool:
+        return self.proc is not None and self.proc.poll() is None
+
+    def start(self) -> None:
+        if self.is_running():
+            return
+
+        if not SDNQ_WORKER.exists():
+            raise FileNotFoundError(f"Missing SDNQ resident worker: {SDNQ_WORKER}")
+        if not PYTHON.exists():
+            raise FileNotFoundError(f"Missing Python interpreter: {PYTHON}")
+
+        env = os.environ.copy()
+        token = hf_token_from_repo_env()
+        if token:
+            env["HF_TOKEN"] = token
+        default_device = "cuda" if _IS_WINDOWS else "mps"
+        env.setdefault("SDNQ_DEVICE", os.environ.get("SDNQ_DEVICE", default_device))
+        env["ULTRA_FAST_IMAGE_GEN_DIR"] = str(ULTRA_REPO)
+
+        cmd = [str(PYTHON), str(SDNQ_WORKER)]
+        popen_kwargs: dict[str, Any] = dict(
+            cwd=str(ULTRA_REPO),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            env=env,
+        )
+        if not _IS_WINDOWS:
+            popen_kwargs["start_new_session"] = True
+        else:
+            popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        self.proc = subprocess.Popen(cmd, **popen_kwargs)
+        assert self.proc.stderr is not None
+        threading.Thread(target=self._drain_stderr, args=(self.proc.stderr,), daemon=True).start()
+
+    def _drain_stderr(self, stream) -> None:
+        for line in stream:
+            self.last_stderr = (self.last_stderr + line)[-8000:]
+            print(f"[sdnq-resident] {line}", end="", flush=True)
+
+    def _read_line_with_timeout(self, stream, timeout: int) -> str:
+        import queue as _queue
+
+        q: _queue.Queue[str | None] = _queue.Queue()
+
+        def _reader() -> None:
+            try:
+                line = stream.readline()
+                q.put(line if line else None)
+            except Exception:
+                q.put(None)
+
+        t = threading.Thread(target=_reader, daemon=True)
+        t.start()
+        try:
+            result = q.get(timeout=timeout)
+        except _queue.Empty:
+            result = None
+        return result or ""
+
+    def request(self, payload: dict[str, Any], timeout: int) -> dict[str, Any]:
+        with self.lock:
+            self.start()
+            assert self.proc is not None
+            assert self.proc.stdin is not None
+            assert self.proc.stdout is not None
+
+            request_id = str(uuid.uuid4())
+            self.proc.stdin.write(json.dumps({"id": request_id, **payload}) + "\n")
+            self.proc.stdin.flush()
+
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                remaining = max(0.25, deadline - time.time())
+                line = self._read_line_with_timeout(self.proc.stdout, remaining)
+                if not line:
+                    if self.proc.poll() is not None:
+                        raise RuntimeError(
+                            f"SDNQ resident worker exited with {self.proc.returncode}\n{self.last_stderr}"
+                        )
+                    continue
+                response = json.loads(line)
+                if response.get("id") != request_id:
+                    continue
+                if not response.get("ok"):
+                    raise RuntimeError(
+                        f"SDNQ resident request failed: {response.get('error')}\n"
+                        f"{response.get('traceback', '')}\n{self.last_stderr}"
+                    )
+                return response
+
+            raise TimeoutError(f"SDNQ resident request timed out after {timeout}s\n{self.last_stderr}")
+
+
+SDNQ_RESIDENT = SdnqResident()
+
+
 def is_mflux_backend(backend: str) -> bool:
     return backend in MFLUX_BACKEND_CONFIGS
 
@@ -475,6 +595,42 @@ def run_mflux_resident(
     return response
 
 
+def run_sdnq_resident(
+    *,
+    prompt: str,
+    dimensions: Dimensions,
+    steps: int,
+    seed: int,
+    guidance: float,
+    output_path: Path,
+    timeout: int,
+    reference_paths: list[Path],
+) -> dict[str, Any]:
+    response = SDNQ_RESIDENT.request(
+        {
+            "action": "generate",
+            "prompt": prompt,
+            "width": dimensions.width,
+            "height": dimensions.height,
+            "steps": steps,
+            "seed": seed,
+            "guidance": guidance,
+            "output_path": str(output_path),
+            "image_paths": [str(p) for p in reference_paths[:2]],
+            "model_id": "black-forest-labs/FLUX.2-klein-4B",
+            "gguf_variant": "4b",
+        },
+        timeout=timeout,
+    )
+    if not output_path.exists():
+        raise RuntimeError(f"SDNQ resident completed but did not write {output_path}")
+
+    STATUS["residentBackends"] = list(
+        set(STATUS["residentBackends"]) | {"sdnq-hs"}
+    )
+    return response
+
+
 def run_generation(payload: dict[str, Any]) -> dict[str, Any]:
     backend = payload.get("backend") or "mflux-hs"
     if backend not in BACKENDS:
@@ -508,7 +664,36 @@ def run_generation(payload: dict[str, Any]) -> dict[str, Any]:
     log = ""
     resident = False
     resident_meta: dict[str, Any] = {}
-    if is_mflux_backend(backend) and MFLUX_RESIDENT_ENABLED:
+
+    if backend == "sdnq-hs" and SDNQ_RESIDENT_ENABLED:
+        try:
+            resident_response = run_sdnq_resident(
+                prompt=prompt,
+                dimensions=dimensions,
+                steps=steps,
+                seed=seed,
+                guidance=guidance,
+                output_path=output_path,
+                timeout=timeout,
+                reference_paths=reference_paths,
+            )
+            elapsed = time.time() - start
+            resident = True
+            resident_meta = {
+                "loadSeconds": resident_response.get("loadSeconds"),
+                "generationTime": resident_response.get("elapsedSeconds"),
+                "generations": resident_response.get("generations"),
+                "device": resident_response.get("device"),
+                "pid": SDNQ_RESIDENT.proc.pid if SDNQ_RESIDENT.proc else None,
+                "generationKind": resident_response.get("generationKind"),
+                "referenceCount": resident_response.get("referenceCount"),
+                "cudaAllocGb": resident_response.get("cudaAllocGb"),
+                "cudaReservedGb": resident_response.get("cudaReservedGb"),
+            }
+        except Exception as error:
+            log = f"Resident SDNQ failed, falling back to CLI:\n{error}\n"
+
+    if not resident and is_mflux_backend(backend) and MFLUX_RESIDENT_ENABLED:
         try:
             resident_response = run_mflux_resident(
                 prompt=prompt,
@@ -621,6 +806,10 @@ class Handler(BaseHTTPRequestHandler):
                     "loaded": bool(STATUS["residentBackends"]),
                     "residentBackends": STATUS["residentBackends"],
                     "mfluxResident": STATUS["mfluxResident"],
+                    "sdnqResident": {
+                        "running": SDNQ_RESIDENT.is_running(),
+                        "pid": SDNQ_RESIDENT.proc.pid if SDNQ_RESIDENT.proc else None,
+                    },
                     "warmed": STATUS["lastWarm"],
                     "repo": str(ULTRA_REPO),
                     "python": str(PYTHON),
@@ -662,7 +851,7 @@ class Handler(BaseHTTPRequestHandler):
                         {"mode": "fast", "longSide": 1024},
                         {"mode": "slow", "longSide": 2048},
                     ],
-                    "warmNote": "MFLUX warm starts a resident worker and keeps the model process alive.",
+                    "warmNote": "Warming mflux-hs or sdnq-hs starts a resident worker that keeps the model in memory between requests.",
                 },
             )
             return
