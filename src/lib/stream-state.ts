@@ -27,6 +27,10 @@ export type StreamState = {
   voting: VoteState | null;
   lastTurnAt: number | null;
   lastTurnSummary: string | null;
+  /** Tracks when each donor last triggered a story event (username → timestamp ms). */
+  donationCooldowns: Map<string, number>;
+  /** Timestamp of the last processed donation event. */
+  lastDonationAt: number | null;
 };
 
 declare global {
@@ -34,7 +38,14 @@ declare global {
 }
 
 function makeState(): StreamState {
-  return { activeChatId: null, voting: null, lastTurnAt: null, lastTurnSummary: null };
+  return {
+    activeChatId: null,
+    voting: null,
+    lastTurnAt: null,
+    lastTurnSummary: null,
+    donationCooldowns: new Map(),
+    lastDonationAt: null,
+  };
 }
 
 export function getStreamState(): StreamState {
@@ -103,6 +114,50 @@ export function closeVote(): VoteEntry | null {
 
 export function clearVote(): void {
   getStreamState().voting = null;
+}
+
+/**
+ * Check whether a donation from `username` should fire a story event.
+ *
+ * Two independent cooldowns prevent spam:
+ *   - Per-user: one event per donor per `userCooldownSeconds` (default 60)
+ *   - Global:   one event per `globalCooldownSeconds` across all donors (default 15)
+ *
+ * Returns `{ allowed: true }` or `{ allowed: false, reason: string }`.
+ * When allowed, records the current timestamp so subsequent calls respect the cooldown.
+ */
+export function canFireDonation(
+  username: string,
+  userCooldownSeconds: number,
+  globalCooldownSeconds: number,
+): { allowed: true } | { allowed: false; reason: string } {
+  const state = getStreamState();
+  const now = Date.now();
+
+  if (state.lastDonationAt !== null) {
+    const globalGapMs = now - state.lastDonationAt;
+    if (globalGapMs < globalCooldownSeconds * 1000) {
+      return {
+        allowed: false,
+        reason: `Global cooldown: ${Math.ceil((globalCooldownSeconds * 1000 - globalGapMs) / 1000)}s remaining`,
+      };
+    }
+  }
+
+  const lastUserAt = state.donationCooldowns.get(username.toLowerCase());
+  if (lastUserAt !== undefined) {
+    const userGapMs = now - lastUserAt;
+    if (userGapMs < userCooldownSeconds * 1000) {
+      return {
+        allowed: false,
+        reason: `Per-user cooldown for ${username}: ${Math.ceil((userCooldownSeconds * 1000 - userGapMs) / 1000)}s remaining`,
+      };
+    }
+  }
+
+  state.donationCooldowns.set(username.toLowerCase(), now);
+  state.lastDonationAt = now;
+  return { allowed: true };
 }
 
 export function serializeVoteState(vote: VoteState) {

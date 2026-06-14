@@ -17,7 +17,7 @@
  * as a "story" directive. If no message, a default event fires based on tier.
  */
 
-import { getStreamState } from "@/lib/stream-state";
+import { getStreamState, canFireDonation } from "@/lib/stream-state";
 import { serverEnv } from "@/lib/server-env";
 import { z } from "zod";
 
@@ -137,6 +137,14 @@ export async function POST(request: Request) {
   const state = getStreamState();
   if (!state.activeChatId) {
     return Response.json({ ok: true, processed: false, reason: "No active chat." });
+  }
+
+  const userCooldown = parseInt(serverEnv("DONATION_USER_COOLDOWN_SECONDS", "60") || "60", 10);
+  const globalCooldown = parseInt(serverEnv("DONATION_GLOBAL_COOLDOWN_SECONDS", "15") || "15", 10);
+  const cooldownCheck = canFireDonation(event.username, userCooldown, globalCooldown);
+  if (!cooldownCheck.allowed) {
+    console.log(`[donation] Skipped (cooldown): ${cooldownCheck.reason}`);
+    return Response.json({ ok: true, processed: false, reason: cooldownCheck.reason });
   }
 
   const storyText = buildStoryInjection(event);
