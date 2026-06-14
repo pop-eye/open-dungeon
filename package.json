@@ -11,9 +11,9 @@
     "start": "next start",
     "start:tailscale": "next start -H 0.0.0.0 -p 3002",
     "lint": "eslint",
-    "image:server": "\"${ULTRA_FAST_IMAGE_GEN_PYTHON:-$HOME/ultra-fast-image-gen/.venv/bin/python}\" image_server/optimized_image_server.py",
-    "image:warm:mflux": "curl -sS -X POST http://127.0.0.1:7869/warm -H 'Content-Type: application/json' -d '{\"backend\":\"mflux-hs\"}'",
-    "image:warm:sdnq": "curl -sS -X POST http://127.0.0.1:7869/warm -H 'Content-Type: application/json' -d '{\"backend\":\"sdnq-hs\"}'",
+    "image:server": "node scripts/image-server.mjs",
+    "image:warm:mflux": "node scripts/warm.mjs mflux-hs",
+    "image:warm:sdnq": "node scripts/warm.mjs sdnq-hs",
     "flux:worker": "npm run image:server"
   },
   "dependencies": {

@@ -15,7 +15,6 @@ import os
 from pathlib import Path
 import random
 import re
-import select
 import signal
 import subprocess
 import sys
@@ -25,13 +24,31 @@ import uuid
 from typing import Any
 from urllib.parse import urlparse
 
+_IS_WINDOWS = sys.platform == "win32"
+
+
+def _kill_process(proc: subprocess.Popen, force: bool = False) -> None:
+    """Terminate a subprocess in a cross-platform way."""
+    try:
+        if _IS_WINDOWS:
+            proc.terminate()
+        else:
+            import os as _os
+            sig = signal.SIGKILL if force else signal.SIGTERM
+            _os.killpg(proc.pid, sig)
+    except ProcessLookupError:
+        pass
+
 
 APP_ROOT = Path(__file__).resolve().parents[1]
 ULTRA_REPO = Path(
     os.environ.get("ULTRA_FAST_IMAGE_GEN_DIR", str(Path.home() / "ultra-fast-image-gen"))
 ).expanduser()
+_DEFAULT_PYTHON = (
+    ULTRA_REPO / ".venv" / ("Scripts/python.exe" if _IS_WINDOWS else "bin/python")
+)
 PYTHON = Path(
-    os.environ.get("ULTRA_FAST_IMAGE_GEN_PYTHON", ULTRA_REPO / ".venv/bin/python")
+    os.environ.get("ULTRA_FAST_IMAGE_GEN_PYTHON", str(_DEFAULT_PYTHON))
 ).expanduser()
 GENERATE = ULTRA_REPO / "generate.py"
 # Patched MFLUX checkout created by ultra-fast-image-gen/scripts/setup_mflux_hs.sh
@@ -201,17 +218,20 @@ class MfluxResident:
             "python",
             str(MFLUX_WORKER),
         ]
-        self.proc = subprocess.Popen(
-            cmd,
+        popen_kwargs: dict[str, Any] = dict(
             cwd=str(ULTRA_REPO),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
-            start_new_session=True,
             env=env,
         )
+        if not _IS_WINDOWS:
+            popen_kwargs["start_new_session"] = True
+        else:
+            popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        self.proc = subprocess.Popen(cmd, **popen_kwargs)
         assert self.proc.stderr is not None
         threading.Thread(target=self._drain_stderr, args=(self.proc.stderr,), daemon=True).start()
 
@@ -219,6 +239,31 @@ class MfluxResident:
         for line in stream:
             self.last_stderr = (self.last_stderr + line)[-8000:]
             print(f"[mflux-resident] {line}", end="", flush=True)
+
+    def _read_line_with_timeout(self, stream, timeout: int) -> str:
+        """Read one line from a pipe, with a deadline.
+
+        select.select does not work on pipes on Windows, so we use a reader
+        thread that puts lines onto a queue — works on all platforms.
+        """
+        import queue as _queue
+
+        q: _queue.Queue[str | None] = _queue.Queue()
+
+        def _reader() -> None:
+            try:
+                line = stream.readline()
+                q.put(line if line else None)
+            except Exception:
+                q.put(None)
+
+        t = threading.Thread(target=_reader, daemon=True)
+        t.start()
+        try:
+            result = q.get(timeout=timeout)
+        except _queue.Empty:
+            result = None
+        return result or ""
 
     def request(self, payload: dict[str, Any], timeout: int) -> dict[str, Any]:
         with self.lock:
@@ -233,14 +278,8 @@ class MfluxResident:
 
             deadline = time.time() + timeout
             while time.time() < deadline:
-                ready, _, _ = select.select([self.proc.stdout], [], [], 0.25)
-                if not ready:
-                    if self.proc.poll() is not None:
-                        raise RuntimeError(
-                            f"MFLUX resident worker exited with {self.proc.returncode}\n{self.last_stderr}"
-                        )
-                    continue
-                line = self.proc.stdout.readline()
+                remaining = max(0.25, deadline - time.time())
+                line = self._read_line_with_timeout(self.proc.stdout, remaining)
                 if not line:
                     if self.proc.poll() is not None:
                         raise RuntimeError(
@@ -509,24 +548,27 @@ def run_generation(payload: dict[str, Any]) -> dict[str, Any]:
             timeout=timeout,
             reference_paths=reference_paths,
         )
-        proc = subprocess.Popen(
-            cmd,
+        popen_kwargs2: dict[str, Any] = dict(
             cwd=str(ULTRA_REPO),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            start_new_session=True,
             env=env,
         )
+        if not _IS_WINDOWS:
+            popen_kwargs2["start_new_session"] = True
+        else:
+            popen_kwargs2["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        proc = subprocess.Popen(cmd, **popen_kwargs2)
         try:
             cli_log, _ = proc.communicate(timeout=timeout)
             log += cli_log
         except subprocess.TimeoutExpired:
-            os.killpg(proc.pid, signal.SIGTERM)
+            _kill_process(proc)
             try:
                 cli_log, _ = proc.communicate(timeout=5)
             except subprocess.TimeoutExpired:
-                os.killpg(proc.pid, signal.SIGKILL)
+                _kill_process(proc, force=True)
                 cli_log, _ = proc.communicate()
             log += cli_log
             raise TimeoutError(f"{backend} timed out after {timeout}s\n{log}")
