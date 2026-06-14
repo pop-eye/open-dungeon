@@ -12,7 +12,7 @@ const requestSchema = z.object({
   messageId: z.string().optional(),
   prompt: z.string().min(1),
   mode: z.enum(["fast", "slow"]).default("slow"),
-  backend: z.enum(["mflux-hs", "sdnq-hs"]).default("mflux-hs"),
+  backend: z.enum(["mflux-hs", "sdnq-hs", "comfyui-flux-gguf"]).default("mflux-hs"),
   aspect: z.enum(["square", "portrait", "landscape"]).default("square"),
   seed: z.number().int().optional(),
   references: z

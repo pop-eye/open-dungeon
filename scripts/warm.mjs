@@ -4,14 +4,34 @@
  * Replaces the bash curl one-liners in `image:warm:*` npm scripts.
  *
  * Usage (via npm): npm run image:warm:mflux
- *          direct: node scripts/warm.mjs mflux-hs
+ *          direct: node scripts/warm.mjs [backend-id]
+ *
+ * If no backend ID is given, queries /backends to discover the active one.
  */
 
-const backend = process.argv[2] || "mflux-hs";
+const requestedBackend = process.argv[2];
 const workerUrl = (
   process.env.FLUX_WORKER_URL || "http://127.0.0.1:7869"
 ).replace(/\/$/, "");
 
+async function resolveBackend() {
+  if (requestedBackend) return requestedBackend;
+  // Auto-discover the first available backend from the running server
+  try {
+    const resp = await fetch(`${workerUrl}/backends`);
+    if (resp.ok) {
+      const data = await resp.json();
+      const first = data.backends?.[0]?.id;
+      if (first) return first;
+    }
+  } catch {
+    // fall through
+  }
+  // Default to mflux-hs for Mac, comfyui-flux-gguf for Windows
+  return process.platform === "win32" ? "comfyui-flux-gguf" : "mflux-hs";
+}
+
+const backend = await resolveBackend();
 console.log(`[warm] Sending warm request for backend "${backend}" to ${workerUrl}/warm`);
 
 let response;
