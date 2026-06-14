@@ -35,7 +35,7 @@ export default function RootLayout({
       // browser extensions inject attributes into <html> before React loads
       suppressHydrationWarning
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col" suppressHydrationWarning>{children}</body>
     </html>
   );
 }
