@@ -12,6 +12,7 @@
  *   ?passages=N     — number of recent passages to show (default 3)
  *   ?poll=N         — polling interval in ms (default 3000)
  *   ?fontSize=N     — base font size in px (default 18)
+ *   ?commands=1     — show the commands panel in the bottom-right corner
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -124,6 +125,7 @@ export default function OverlayPage({ params }: { params: Promise<{ chatId: stri
   const [passages, setPassages] = useState(3);
   const [pollInterval, setPollInterval] = useState(3000);
   const [fontSize, setFontSize] = useState(18);
+  const [showCommands, setShowCommands] = useState(false);
 
   useEffect(() => {
     const sp = new URLSearchParams(window.location.search);
@@ -131,6 +133,7 @@ export default function OverlayPage({ params }: { params: Promise<{ chatId: stri
     if (sp.get("passages")) setPassages(Math.max(1, Math.min(10, parseInt(sp.get("passages")!, 10))));
     if (sp.get("poll")) setPollInterval(Math.max(1000, parseInt(sp.get("poll")!, 10)));
     if (sp.get("fontSize")) setFontSize(Math.max(12, Math.min(40, parseInt(sp.get("fontSize")!, 10))));
+    if (sp.get("commands") === "1") setShowCommands(true);
   }, []);
 
   // Polling
@@ -178,7 +181,7 @@ export default function OverlayPage({ params }: { params: Promise<{ chatId: stri
 
   return (
     <div
-      className={`min-h-screen font-sans ${transparent ? "bg-transparent" : "bg-black/90"} text-white`}
+      className={`min-h-screen font-sans ${transparent ? "bg-transparent" : "bg-black/90"} text-white relative`}
       style={{ fontSize: `${fontSize}px` }}
     >
       <div className="max-w-2xl mx-auto p-6 pt-8">
@@ -203,6 +206,32 @@ export default function OverlayPage({ params }: { params: Promise<{ chatId: stri
         {messages.map((m) => (
           <StoryPassage key={m.id} message={m} isLatest={m.id === latestId} />
         ))}
+
+        {/* Commands reference panel */}
+        {showCommands && (
+          <div className="fixed bottom-4 right-4 bg-black/70 border border-white/10 rounded-lg p-3 text-xs text-gray-300 backdrop-blur-sm min-w-[180px]">
+            <p className="text-purple-400 uppercase tracking-widest text-[10px] mb-2 font-semibold">
+              Commands
+            </p>
+            <table className="w-full border-collapse">
+              <tbody>
+                {[
+                  ["!do", "perform an action"],
+                  ["!say", "say something"],
+                  ["!story", "story directive"],
+                  ["!continue", "advance story"],
+                  ["!vote", "open a vote (mod)"],
+                  ["!odhelp", "show all commands"],
+                ].map(([cmd, desc]) => (
+                  <tr key={cmd}>
+                    <td className="pr-2 py-0.5 text-purple-300 font-mono whitespace-nowrap">{cmd}</td>
+                    <td className="py-0.5 text-gray-400">{desc}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
 
         {/* Voting panel */}
         {vote && (

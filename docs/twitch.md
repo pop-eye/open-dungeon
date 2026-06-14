@@ -112,6 +112,7 @@ Check **"Allow Transparency"** and use Chroma Key or add `?transparent=1` to the
 | `?passages=N` | 3 | Number of recent story passages to show |
 | `?fontSize=N` | 18 | Base font size in pixels |
 | `?poll=N` | 3000 | Polling interval in milliseconds |
+| `?commands=1` | off | Show chat command reference panel (bottom-right) |
 
 Example: `http://localhost:3000/overlay/abc123?transparent=1&passages=4&fontSize=20`
 
