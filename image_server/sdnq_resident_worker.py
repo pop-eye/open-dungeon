@@ -129,6 +129,9 @@ def _load_pipeline(*, model_id: str = "black-forest-labs/FLUX.2-klein-4B",
     gguf_repo = _gguf_repo(gguf_variant)
 
     print(f"[sdnq-resident] loading pipeline {model_id} on {DEVICE}", file=sys.stderr, flush=True)
+    print(f"[sdnq-resident] GGUF encoder: {gguf_repo}/{gguf_file}", file=sys.stderr, flush=True)
+    print(f"[sdnq-resident] HF token present: {bool(token)}", file=sys.stderr, flush=True)
+    print(f"[sdnq-resident] If models are not cached, expect a 7-10 GB download — this can take 10-30 min", file=sys.stderr, flush=True)
     start = time.time()
 
     try:

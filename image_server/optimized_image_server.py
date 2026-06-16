@@ -737,6 +737,7 @@ def run_generation(payload: dict[str, Any]) -> dict[str, Any]:
             timeout=timeout,
             reference_paths=reference_paths,
         )
+        print(f"[image-server] CLI fallback: {backend} {dimensions.width}x{dimensions.height} steps={steps}", flush=True)
         popen_kwargs2: dict[str, Any] = dict(
             cwd=str(ULTRA_REPO),
             stdout=subprocess.PIPE,
@@ -749,18 +750,24 @@ def run_generation(payload: dict[str, Any]) -> dict[str, Any]:
         else:
             popen_kwargs2["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
         proc = subprocess.Popen(cmd, **popen_kwargs2)
+        cli_lines: list[str] = []
+        deadline = time.time() + timeout
+        assert proc.stdout is not None
         try:
-            cli_log, _ = proc.communicate(timeout=timeout)
-            log += cli_log
+            for raw_line in proc.stdout:
+                cli_lines.append(raw_line)
+                stripped = raw_line.rstrip()
+                if stripped:
+                    print(f"[{backend}] {stripped}", flush=True)
+                if time.time() > deadline:
+                    _kill_process(proc)
+                    log += "".join(cli_lines)
+                    raise TimeoutError(f"{backend} timed out after {timeout}s\n{log}")
+            proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
-            _kill_process(proc)
-            try:
-                cli_log, _ = proc.communicate(timeout=5)
-            except subprocess.TimeoutExpired:
-                _kill_process(proc, force=True)
-                cli_log, _ = proc.communicate()
-            log += cli_log
-            raise TimeoutError(f"{backend} timed out after {timeout}s\n{log}")
+            _kill_process(proc, force=True)
+            proc.wait()
+        log += "".join(cli_lines)
 
         elapsed = time.time() - start
         if proc.returncode != 0:
@@ -918,11 +925,22 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> int:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    print(
-        f"Optimized image server on http://{HOST}:{PORT} "
-        f"(repo={ULTRA_REPO}, mflux={MFLUX_DIR})",
-        flush=True,
-    )
+    sdnq_device = os.environ.get("SDNQ_DEVICE", "cuda" if _IS_WINDOWS else "mps")
+    print(f"Optimized image server on http://{HOST}:{PORT}", flush=True)
+    print(f"  repo   : {ULTRA_REPO}", flush=True)
+    print(f"  python : {PYTHON}  (exists={PYTHON.exists()})", flush=True)
+    print(f"  device : {sdnq_device}", flush=True)
+    print(f"  timeout: {DEFAULT_TIMEOUT}s  (set IMAGE_SERVER_TIMEOUT to change)", flush=True)
+    print(f"  output : {OUT_DIR}", flush=True)
+    if not PYTHON.exists():
+        print(f"  WARNING: Python not found at {PYTHON}", flush=True)
+    if not GENERATE.exists():
+        print(f"  WARNING: generate.py not found at {GENERATE}", flush=True)
+    if SDNQ_RESIDENT_ENABLED:
+        print(f"  resident: sdnq-hs enabled (set SDNQ_RESIDENT=0 to disable)", flush=True)
+        print(f"  NOTE: First generation downloads the FLUX model (~8 GB) -- this can take 10-30 min", flush=True)
+        print(f"        Watch for download progress lines below as the model loads.", flush=True)
+    print("", flush=True)
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     server.serve_forever()
     return 0
