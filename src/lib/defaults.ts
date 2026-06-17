@@ -14,7 +14,7 @@ export const DEFAULT_STORY_SETTINGS: StorySettings = {
   customModel: "",
   customApiKey: "",
   imageMode: "fast",
-  imageBackend: "mflux-hs",
+  imageBackend: "sdnq-hs",
   aspect: "square",
   autoImages: true,
 };

@@ -159,7 +159,8 @@ function normalizeSettings(settings?: Partial<StorySettings>): StorySettings {
 
   if (
     merged.imageBackend !== "mflux-hs" &&
-    merged.imageBackend !== "sdnq-hs"
+    merged.imageBackend !== "sdnq-hs" &&
+    merged.imageBackend !== "comfyui-flux-gguf"
   ) {
     merged.imageBackend = DEFAULT_STORY_SETTINGS.imageBackend;
   }

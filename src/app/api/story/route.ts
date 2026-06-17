@@ -91,7 +91,7 @@ const requestSchema = z.object({
     customModel: z.string().trim().max(200).default(""),
     customApiKey: z.string().trim().max(400).default(""),
     imageMode: z.enum(["fast", "slow"]).default("slow"),
-    imageBackend: z.enum(["mflux-hs", "sdnq-hs", "comfyui-flux-gguf"]).default("mflux-hs"),
+    imageBackend: z.enum(["mflux-hs", "sdnq-hs", "comfyui-flux-gguf"]).default("sdnq-hs"),
     aspect: z.enum(["square", "portrait", "landscape"]).default("square"),
     autoImages: z.boolean().default(true),
   }),
