@@ -264,6 +264,18 @@ def _handle(payload: dict[str, Any]) -> dict[str, Any]:
 # ── main loop ─────────────────────────────────────────────────────────────────
 
 def main() -> int:
+    # Reserve the real stdout exclusively for the JSON-line IPC protocol. The
+    # diffusers/transformers loaders and HS optimizations print progress to
+    # stdout; if any of that reached the parent it would be misread as a
+    # protocol response, raising on the server side and triggering a wasteful
+    # CLI fallback. Redirect everything else to stderr.
+    proto_out = sys.stdout
+    sys.stdout = sys.stderr
+
+    def _respond(obj: dict[str, Any]) -> None:
+        proto_out.write(json.dumps(obj) + "\n")
+        proto_out.flush()
+
     print("[sdnq-resident] ready", file=sys.stderr, flush=True)
     for line in sys.stdin:
         line = line.strip()
@@ -284,7 +296,7 @@ def main() -> int:
                 "traceback": traceback.format_exc()[-4000:],
             }
 
-        print(json.dumps(response), flush=True)
+        _respond(response)
 
     return 0
 

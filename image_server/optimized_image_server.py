@@ -293,8 +293,12 @@ class MfluxResident:
                             f"MFLUX resident worker exited with {self.proc.returncode}\n{self.last_stderr}"
                         )
                     continue
-                response = json.loads(line)
-                if response.get("id") != request_id:
+                try:
+                    response = json.loads(line)
+                except (ValueError, TypeError):
+                    # Stray non-protocol line on stdout (loader noise); ignore.
+                    continue
+                if not isinstance(response, dict) or response.get("id") != request_id:
                     continue
                 if not response.get("ok"):
                     raise RuntimeError(
@@ -406,8 +410,12 @@ class SdnqResident:
                             f"SDNQ resident worker exited with {self.proc.returncode}\n{self.last_stderr}"
                         )
                     continue
-                response = json.loads(line)
-                if response.get("id") != request_id:
+                try:
+                    response = json.loads(line)
+                except (ValueError, TypeError):
+                    # Stray non-protocol line on stdout (loader noise); ignore.
+                    continue
+                if not isinstance(response, dict) or response.get("id") != request_id:
                     continue
                 if not response.get("ok"):
                     raise RuntimeError(
