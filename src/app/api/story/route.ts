@@ -20,9 +20,12 @@ import type { Attachment, StoryCharacter, StoryMessage } from "@/lib/types";
 export const runtime = "nodejs";
 
 const MAX_IMAGE_REFERENCES = 2;
-const DEFAULT_MAX_OUTPUT_TOKENS = 16_384;
+const DEFAULT_MAX_OUTPUT_TOKENS = 1_024;
 const MAX_CONFIGURABLE_OUTPUT_TOKENS = 65_536;
-const DEFAULT_LOCAL_MAX_OUTPUT_TOKENS = 4_096;
+// ~150-word passages need ~220 tokens; cap well above that so the model
+// reaches a natural ending instead of being cut off, but low enough that it
+// can't ramble for pages. Raise via LOCAL_TEXT_MAX_TOKENS for longer prose.
+const DEFAULT_LOCAL_MAX_OUTPUT_TOKENS = 512;
 // Rough chars-per-token for English prose, used to budget story history.
 const HISTORY_CHARS_PER_TOKEN = 3.6;
 // Tokens held back for the system prompt, character portraits, and the reply.
