@@ -103,7 +103,7 @@ export function buildStoryMessages(
           ? `The story so far (older events, already condensed — treat as established canon):\n${storySummary}`
           : "",
         `Saved characters:\n${characterRoster}`,
-        `Image defaults: ${settings.imageBackend} backend, ${settings.imageMode === "slow" ? "2048" : "1024"} long side, ${settings.aspect} aspect. Do not include text overlays in generated images.`,
+        `Image defaults: ${settings.imageBackend} backend, ${settings.imageMode === "slow" ? "1536" : "768"} long side, ${settings.aspect} aspect. Do not include text overlays in generated images.`,
       ]
         .filter(Boolean)
         .join("\n\n"),
@@ -188,7 +188,7 @@ export function extractStoryText(raw: unknown): string {
 }
 
 export function dimensionsForImage(mode: ImageMode, aspect: AspectPreset) {
-  const longSide = mode === "slow" ? 2048 : 1024;
+  const longSide = mode === "slow" ? 1536 : 768;
 
   if (aspect === "portrait") {
     return { width: Math.round(longSide * 0.75), height: longSide };
