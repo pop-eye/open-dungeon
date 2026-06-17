@@ -246,11 +246,21 @@ function extractImagePromptFromStory(storyText: string): string | null {
     .replace(/\s+/g, " ")
     .trim();
 
-  if (prose.length < 30) return null;
+  // Fall back to the whole passage (markdown stripped) when descriptive prose
+  // is sparse — e.g. dialogue-heavy beats. Better an imperfect prompt than none.
+  const source =
+    prose.length >= 30
+      ? prose
+      : storyText
+          .replace(/[*_>#`"“”]/g, "")
+          .replace(/\s+/g, " ")
+          .trim();
 
-  // Take first ~280 chars of prose for a punchy visual prompt
-  const excerpt = prose.slice(0, 280).replace(/[,.]?\s*\S+$/, "").trim();
-  return excerpt.length > 20 ? excerpt : null;
+  if (source.length < 20) return null;
+
+  // Take first ~280 chars for a punchy visual prompt
+  const excerpt = source.slice(0, 280).replace(/[,.]?\s*\S+$/, "").trim();
+  return excerpt.length > 12 ? excerpt : source.slice(0, 280).trim() || null;
 }
 
 function parseGenerateImageToolCall(toolCalls: unknown) {
