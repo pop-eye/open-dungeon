@@ -101,11 +101,20 @@ def _synthesize_wav(text: str, voice: str, speed: float) -> bytes:
     pipeline = _load_pipeline()
     chunks: list = []
     for result in pipeline(text, voice=voice, speed=speed):
-        # KPipeline yields (graphemes, phonemes, audio); audio is the 3rd item.
-        audio = result[2] if isinstance(result, (tuple, list)) else result
+        # KPipeline yields a namedtuple-like Result(graphemes, phonemes, audio).
+        # Access .audio directly; fall back to index [2] for older builds.
+        if hasattr(result, "audio"):
+            audio = result.audio
+        elif isinstance(result, (tuple, list)):
+            audio = result[2]
+        else:
+            audio = result
         if hasattr(audio, "detach"):
             audio = audio.detach().cpu().numpy()
-        chunks.append(np.asarray(audio, dtype=np.float32).reshape(-1))
+        arr = np.asarray(audio, dtype=np.float32)
+        if arr.ndim > 1:
+            arr = arr.reshape(-1)
+        chunks.append(arr)
 
     if not chunks:
         samples = np.zeros(0, dtype=np.float32)
