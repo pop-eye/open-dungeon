@@ -583,6 +583,132 @@ async function requestLocalMessage(
   return { message: data?.message };
 }
 
+type LocalStreamResult = { response?: Response; error?: Response };
+
+// Like requestLocalMessage but asks Ollama to stream. Pre-stream failures
+// (unreachable, missing model, unsupported tools/think) are resolved here and
+// returned as a clean JSON error before any bytes go to the client. On success
+// the raw streaming upstream Response is handed back for chunk parsing.
+async function openLocalStream(
+  model: string,
+  messages: OpenRouterMessage[],
+  includeImageTool: boolean,
+  disableThinking = true,
+): Promise<LocalStreamResult> {
+  const baseUrl = serverEnv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").replace(/\/$/, "");
+  const requestPayload: Record<string, unknown> = {
+    model,
+    messages: toOllamaMessages(messages),
+    stream: true,
+    keep_alive: "30m",
+    options: {
+      temperature: 0.9,
+      num_predict: localMaxOutputTokens(),
+      num_ctx: localContextTokens(model),
+    },
+  };
+
+  if (disableThinking) {
+    requestPayload.think = false;
+  }
+
+  if (includeImageTool) {
+    requestPayload.tools = [generateImageTool];
+    requestPayload.tool_choice = "auto";
+  }
+
+  let upstream: Response;
+  try {
+    upstream = await fetch(`${baseUrl}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(requestPayload),
+    });
+  } catch {
+    return {
+      error: Response.json(
+        {
+          error: `Could not reach Ollama at ${baseUrl}. Start the Ollama app (or \`ollama serve\`), pull the model with \`ollama pull ${model}\`, or switch this chat to OpenRouter in Text Model settings.`,
+        },
+        { status: 502 },
+      ),
+    };
+  }
+
+  if (!upstream.ok) {
+    const text = await upstream.text();
+
+    if (includeImageTool && /does not support tools/i.test(text)) {
+      return openLocalStream(model, messages, false, disableThinking);
+    }
+    if (disableThinking && /does not support think/i.test(text)) {
+      return openLocalStream(model, messages, includeImageTool, false);
+    }
+
+    const hint = /not found/i.test(text)
+      ? ` The model is not installed — run \`ollama pull ${model}\`.`
+      : "";
+    return {
+      error: Response.json(
+        {
+          error: `Local model request failed (${upstream.status}).${hint}`,
+          detail: text.slice(0, 1000),
+        },
+        { status: 502 },
+      ),
+    };
+  }
+
+  return { response: upstream };
+}
+
+// Turns a final upstream message into the persisted assistant passage, applying
+// the same image-tool / prose-extraction logic the non-streaming path uses.
+function buildAssistantMessage(
+  message: UpstreamChatMessage | undefined,
+  body: z.infer<typeof requestSchema>,
+  knownCharacterIds: Set<string>,
+  assistantId: string,
+): StoryMessage | null {
+  const storyText = extractStoryText(message?.content);
+  const imageToolArgs =
+    parseGenerateImageToolCall(message?.tool_calls) ??
+    (body.settings.autoImages && storyText
+      ? (() => {
+          const p = extractImagePromptFromStory(storyText);
+          return p ? { prompt: p, reason: "auto-extracted", characterIds: [] as string[] } : null;
+        })()
+      : null);
+
+  if (!storyText && !imageToolArgs) {
+    return null;
+  }
+
+  const characterIds =
+    imageToolArgs?.characterIds
+      ?.filter((id: string) => knownCharacterIds.has(id))
+      .slice(0, MAX_IMAGE_REFERENCES) || [];
+
+  return {
+    id: assistantId,
+    role: "assistant",
+    content: storyText || "The moment hangs there, waiting for what you do next.",
+    createdAt: new Date().toISOString(),
+    imageRequest:
+      body.settings.autoImages && imageToolArgs?.prompt
+        ? {
+            needed: true,
+            prompt: imageToolArgs.prompt,
+            mode: body.settings.imageMode,
+            backend: body.settings.imageBackend,
+            aspect: body.settings.aspect,
+            reason: imageToolArgs.reason,
+            characterIds,
+          }
+        : { needed: false },
+  };
+}
+
 const SUMMARIZER_SYSTEM = `You maintain the canonical "story so far" memory for an ongoing interactive roleplay. Merge the existing summary with the new passages into one updated summary.
 
 Preserve, with priority: active plot threads and their current state; characters (names, roles, relationships, distinctive physical details); promises, debts, secrets, injuries, and items that could matter later; locations and the order of major events; choices the player made that shaped the story.
@@ -727,6 +853,123 @@ export async function POST(request: Request) {
   const messages = characterVisionMessage
     ? [storyMessages[0], characterVisionMessage, ...storyMessages.slice(1)]
     : storyMessages;
+  const assistantId = crypto.randomUUID();
+
+  // Local provider: stream the passage token-by-token as NDJSON so the player
+  // sees prose appear immediately instead of waiting for the full generation.
+  if (provider === "local") {
+    const opened = await openLocalStream(
+      body.settings.localTextModel,
+      messages,
+      body.settings.autoImages,
+    );
+    if (opened.error) {
+      return opened.error;
+    }
+
+    const upstreamBody = opened.response!.body;
+    if (!upstreamBody) {
+      return Response.json(
+        { error: "The local model returned an empty stream." },
+        { status: 502 },
+      );
+    }
+
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
+
+    const stream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        const send = (event: Record<string, unknown>) =>
+          controller.enqueue(encoder.encode(JSON.stringify(event) + "\n"));
+
+        send({ type: "start", id: assistantId });
+
+        let contentBuffer = "";
+        let toolCalls: unknown = undefined;
+        let pending = "";
+
+        const reader = upstreamBody.getReader();
+        try {
+          for (;;) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            pending += decoder.decode(value, { stream: true });
+
+            // Ollama streams one JSON object per line.
+            let newlineIndex: number;
+            while ((newlineIndex = pending.indexOf("\n")) !== -1) {
+              const line = pending.slice(0, newlineIndex).trim();
+              pending = pending.slice(newlineIndex + 1);
+              if (!line) continue;
+
+              let chunk: { message?: UpstreamChatMessage & { content?: string } };
+              try {
+                chunk = JSON.parse(line);
+              } catch {
+                continue;
+              }
+
+              const delta =
+                typeof chunk.message?.content === "string" ? chunk.message.content : "";
+              if (delta) {
+                contentBuffer += delta;
+                send({ type: "delta", text: delta });
+              }
+              if (chunk.message?.tool_calls) {
+                toolCalls = chunk.message.tool_calls;
+              }
+            }
+          }
+        } catch (streamError) {
+          send({
+            type: "error",
+            error:
+              streamError instanceof Error
+                ? streamError.message
+                : "The local model stream was interrupted.",
+          });
+          controller.close();
+          return;
+        }
+
+        const assistantMessage = buildAssistantMessage(
+          { content: contentBuffer, tool_calls: toolCalls },
+          body,
+          knownCharacterIds,
+          assistantId,
+        );
+
+        if (!assistantMessage) {
+          send({ type: "error", error: "The local model returned no story content." });
+          controller.close();
+          return;
+        }
+
+        if (body.chatId) {
+          addMessage(body.chatId, assistantMessage);
+        }
+
+        send({
+          type: "done",
+          id: assistantMessage.id,
+          content: assistantMessage.content,
+          imageRequest: assistantMessage.imageRequest,
+        });
+        controller.close();
+      },
+    });
+
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "application/x-ndjson; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        "X-Accel-Buffering": "no",
+      },
+    });
+  }
+
+  // Custom/remote provider: single-shot JSON response (unchanged behaviour).
   const { message, error } = await requestStoryMessage(
     body.settings,
     messages,
@@ -737,13 +980,14 @@ export async function POST(request: Request) {
     return error;
   }
 
-  const storyText = extractStoryText(message?.content);
-  const imageToolArgs = parseGenerateImageToolCall(message?.tool_calls)
-    ?? (body.settings.autoImages && storyText
-        ? (() => { const p = extractImagePromptFromStory(storyText); return p ? { prompt: p, reason: "auto-extracted", characterIds: [] as string[] } : null; })()
-        : null);
+  const assistantMessage = buildAssistantMessage(
+    message,
+    body,
+    knownCharacterIds,
+    assistantId,
+  );
 
-  if (!storyText && !imageToolArgs) {
+  if (!assistantMessage) {
     return Response.json(
       {
         error: `${provider === "local" ? "The local model" : "The backend"} returned no story content.`,
@@ -752,29 +996,6 @@ export async function POST(request: Request) {
       { status: 502 },
     );
   }
-
-  const characterIds =
-    imageToolArgs?.characterIds
-      ?.filter((id) => knownCharacterIds.has(id))
-      .slice(0, MAX_IMAGE_REFERENCES) || [];
-  const assistantMessage: StoryMessage = {
-    id: crypto.randomUUID(),
-    role: "assistant",
-    content: storyText || "The moment hangs there, waiting for what you do next.",
-    createdAt: new Date().toISOString(),
-    imageRequest:
-      body.settings.autoImages && imageToolArgs?.prompt
-        ? {
-            needed: true,
-            prompt: imageToolArgs.prompt,
-            mode: body.settings.imageMode,
-            backend: body.settings.imageBackend,
-            aspect: body.settings.aspect,
-            reason: imageToolArgs.reason,
-            characterIds,
-          }
-        : { needed: false },
-  };
 
   if (body.chatId) {
     addMessage(body.chatId, assistantMessage);

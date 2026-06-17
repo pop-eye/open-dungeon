@@ -687,29 +687,117 @@ export default function Home() {
           settings: opts.settings,
         }),
       });
-      const payload = await readApi<{
-        id?: string;
-        content: string;
-        imageRequest?: StoryMessage["imageRequest"];
-      }>(response);
+      const isStream =
+        response.ok &&
+        (response.headers.get("content-type") || "").includes("application/x-ndjson");
 
-      const assistantMessage: StoryMessage = {
-        id: payload.id || makeId(),
-        role: "assistant",
-        content: payload.content,
-        createdAt: new Date().toISOString(),
-        imageRequest: payload.imageRequest,
-      };
+      let finalId = makeId();
+      let finalContent = "";
+      let finalImageRequest: StoryMessage["imageRequest"] | undefined;
 
-      setMessages((current) => [...current, assistantMessage]);
+      if (isStream && response.body) {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let placeholderAdded = false;
+        let streamError: string | null = null;
+
+        const handleEvent = (event: Record<string, unknown>) => {
+          const type = event.type;
+          if (type === "start") {
+            finalId = typeof event.id === "string" ? event.id : finalId;
+            setMessages((current) => [
+              ...current,
+              {
+                id: finalId,
+                role: "assistant",
+                content: "",
+                createdAt: new Date().toISOString(),
+              },
+            ]);
+            placeholderAdded = true;
+          } else if (type === "delta") {
+            const text = typeof event.text === "string" ? event.text : "";
+            if (!text) return;
+            finalContent += text;
+            setMessages((current) =>
+              current.map((message) =>
+                message.id === finalId ? { ...message, content: finalContent } : message,
+              ),
+            );
+          } else if (type === "done") {
+            finalId = typeof event.id === "string" ? event.id : finalId;
+            finalContent =
+              typeof event.content === "string" ? event.content : finalContent;
+            finalImageRequest = event.imageRequest as StoryMessage["imageRequest"];
+            setMessages((current) =>
+              current.map((message) =>
+                message.id === finalId
+                  ? { ...message, content: finalContent, imageRequest: finalImageRequest }
+                  : message,
+              ),
+            );
+          } else if (type === "error") {
+            streamError =
+              typeof event.error === "string" ? event.error : "Story stream failed.";
+          }
+        };
+
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let newlineIndex: number;
+          while ((newlineIndex = buffer.indexOf("\n")) !== -1) {
+            const line = buffer.slice(0, newlineIndex).trim();
+            buffer = buffer.slice(newlineIndex + 1);
+            if (!line) continue;
+            try {
+              handleEvent(JSON.parse(line));
+            } catch {
+              // ignore malformed line
+            }
+          }
+        }
+
+        if (streamError) {
+          // Drop the empty placeholder so a failed turn doesn't leave a blank passage.
+          if (placeholderAdded) {
+            setMessages((current) => current.filter((message) => message.id !== finalId));
+          }
+          throw new Error(streamError);
+        }
+      } else {
+        const payload = await readApi<{
+          id?: string;
+          content: string;
+          imageRequest?: StoryMessage["imageRequest"];
+        }>(response);
+
+        finalId = payload.id || makeId();
+        finalContent = payload.content;
+        finalImageRequest = payload.imageRequest;
+
+        setMessages((current) => [
+          ...current,
+          {
+            id: finalId,
+            role: "assistant",
+            content: finalContent,
+            createdAt: new Date().toISOString(),
+            imageRequest: finalImageRequest,
+          },
+        ]);
+      }
+
       void refreshChats();
 
-      if (payload.imageRequest?.needed && payload.imageRequest.prompt) {
+      if (finalImageRequest?.needed && finalImageRequest.prompt) {
         void requestGeneratedImage(
-          assistantMessage.id,
-          payload.imageRequest.prompt,
-          referencesForImage(payload.imageRequest.characterIds, opts.attachments || []),
-          payload.imageRequest,
+          finalId,
+          finalImageRequest.prompt,
+          referencesForImage(finalImageRequest.characterIds, opts.attachments || []),
+          finalImageRequest,
         );
       }
     } catch (storyError) {
