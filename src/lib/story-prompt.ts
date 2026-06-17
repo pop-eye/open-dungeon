@@ -116,6 +116,9 @@ export function buildStoryMessages(
           : "",
         `Saved characters:\n${characterRoster}`,
         `Image defaults: ${settings.imageBackend} backend, ${settings.imageMode === "slow" ? "1536" : "768"} long side, ${settings.aspect} aspect. Do not include text overlays in generated images.`,
+        // Repeated last so it is the most recent instruction the model sees —
+        // recency makes it far likelier to actually obey the length ceiling.
+        "REMINDER — your reply must be ONE paragraph, 2-4 sentences, under 80 words. One beat only, then stop. If you are about to write a 4th sentence, end instead. Do not describe what happens next.",
       ]
         .filter(Boolean)
         .join("\n\n"),
