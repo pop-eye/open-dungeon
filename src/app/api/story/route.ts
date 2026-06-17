@@ -228,6 +228,31 @@ function buildCharacterVisionMessage(characters: StoryCharacter[]): OpenRouterMe
   };
 }
 
+/**
+ * Fallback for models that don't call the image tool: extract a visual scene
+ * description from the story text itself so auto-images still work.
+ */
+function extractImagePromptFromStory(storyText: string): string | null {
+  // Strip dialogue lines and italic speech markers, keep descriptive prose
+  const prose = storyText
+    .split(/\n+/)
+    .filter((line) => {
+      const t = line.trim();
+      return t.length > 0 && !t.startsWith('"') && !t.startsWith('“') && !t.match(/^\*{1,2}"/);
+    })
+    .map((line) => line.replace(/\*+/g, "").replace(/_{1,2}([^_]+)_{1,2}/g, "$1").trim())
+    .filter((line) => line.length > 20)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (prose.length < 30) return null;
+
+  // Take first ~280 chars of prose for a punchy visual prompt
+  const excerpt = prose.slice(0, 280).replace(/[,.]?\s*\S+$/, "").trim();
+  return excerpt.length > 20 ? excerpt : null;
+}
+
 function parseGenerateImageToolCall(toolCalls: unknown) {
   if (!Array.isArray(toolCalls)) {
     return null;
@@ -496,6 +521,7 @@ async function requestLocalMessage(
 
   if (includeImageTool) {
     requestPayload.tools = [generateImageTool];
+    requestPayload.tool_choice = "auto";
   }
 
   let upstream: Response;
@@ -702,7 +728,10 @@ export async function POST(request: Request) {
   }
 
   const storyText = extractStoryText(message?.content);
-  const imageToolArgs = parseGenerateImageToolCall(message?.tool_calls);
+  const imageToolArgs = parseGenerateImageToolCall(message?.tool_calls)
+    ?? (body.settings.autoImages && storyText
+        ? (() => { const p = extractImagePromptFromStory(storyText); return p ? { prompt: p, reason: "auto-extracted", characterIds: [] as string[] } : null; })()
+        : null);
 
   if (!storyText && !imageToolArgs) {
     return Response.json(
