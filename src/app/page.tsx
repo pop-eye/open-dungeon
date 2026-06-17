@@ -543,6 +543,24 @@ export default function Home() {
     [characters],
   );
 
+  // Build a stable character appearance prefix for image prompts. When a
+  // character has a saved 'details' description, prepend it so the model can't
+  // invent a different look each turn. This is the single biggest lever for
+  // character consistency beyond portrait references.
+  const characterAppearancePrefix = useCallback(
+    (characterIds: string[] | undefined): string => {
+      if (!characterIds?.length) return "";
+      const descriptions = characterIds
+        .map((id) => characters.find((c) => c.id === id))
+        .filter(Boolean)
+        .map((c) => c!.details?.trim())
+        .filter(Boolean);
+      if (!descriptions.length) return "";
+      return descriptions.join(". ") + ". ";
+    },
+    [characters],
+  );
+
   async function createCharacterFromDraft() {
     const name = characterDraft.name.trim();
 
@@ -827,9 +845,10 @@ export default function Home() {
       void refreshChats();
 
       if (finalImageRequest?.needed && finalImageRequest.prompt) {
+        const appearancePrefix = characterAppearancePrefix(finalImageRequest.characterIds);
         void requestGeneratedImage(
           finalId,
-          finalImageRequest.prompt,
+          appearancePrefix + finalImageRequest.prompt,
           referencesForImage(finalImageRequest.characterIds, opts.attachments || []),
           finalImageRequest,
         );
@@ -1220,7 +1239,8 @@ export default function Home() {
                                 message.imageRequest?.prompt &&
                                 requestGeneratedImage(
                                   message.id,
-                                  message.imageRequest.prompt,
+                                  characterAppearancePrefix(message.imageRequest.characterIds) +
+                                    message.imageRequest.prompt,
                                   referencesForImage(
                                     message.imageRequest.characterIds,
                                     lastUserAttachments,

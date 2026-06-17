@@ -36,7 +36,7 @@ You have access to a function tool named generate_image. Write the story passage
 Use images sparingly: major character introductions, setting reveals, outfit/scene changes, or emotionally charged tableaux. Do not request an image for every turn.
 
 Do not put image prompts, captions, or tool details in the visible story passage.
-When writing generate_image.prompt for established characters, do not use character names as visual descriptors. Describe each person by visible physical features and whether they are a man or woman: age range, build, hair, face, skin tone, clothing, pose, expression, and lighting. Use names only in generate_image.characterIds via exact IDs.
+When writing generate_image.prompt for established characters, do not use character names as visual descriptors. Copy the exact physical appearance from the character's Details field (hair, face, build, skin tone, age) and carry it verbatim into the image prompt. Do not invent or vary physical features that are already specified — consistency across images depends on repeating them precisely. Add only clothing, pose, expression, and lighting that fit the current scene.
 If an image should show one or two established characters, pass only their exact IDs in generate_image.characterIds. Use at most two IDs. Use [] when no saved character portrait should be referenced.`;
 
 // Evicting history one message at a time would change the start of the prompt
