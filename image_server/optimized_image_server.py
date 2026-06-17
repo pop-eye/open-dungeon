@@ -737,6 +737,12 @@ def run_generation(payload: dict[str, Any]) -> dict[str, Any]:
             timeout=timeout,
             reference_paths=reference_paths,
         )
+        if log:
+            print(
+                f"[image-server] !! Resident worker unavailable -- generation will be SLOW "
+                f"(full model reload every request). Reason:\n{log}",
+                flush=True,
+            )
         print(f"[image-server] CLI fallback: {backend} {dimensions.width}x{dimensions.height} steps={steps}", flush=True)
         popen_kwargs2: dict[str, Any] = dict(
             cwd=str(ULTRA_REPO),
