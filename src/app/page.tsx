@@ -1385,9 +1385,9 @@ export default function Home() {
                 localTextStatus={localTextStatus}
               />
 
-              <StorySettingsPanel settings={settings} setSettings={setSettings} narration={narration} />
+              <StorySettingsPanel settings={settings} setSettings={setSettings} />
 
-              <ImageSettingsPanel settings={settings} setSettings={setSettings} />
+              <ImageSettingsPanel settings={settings} setSettings={setSettings} narration={narration} />
 
               <LocalDataPanel
                 clearing={clearingLocalData}
@@ -1776,12 +1776,12 @@ function MobileToolsSheet({
                 localTextStatus={localTextStatus}
                 compact
               />
-              <StorySettingsPanel settings={settings} setSettings={setSettings} narration={narration} compact />
+              <StorySettingsPanel settings={settings} setSettings={setSettings} compact />
             </div>
           )}
 
           {activeTool === "images" && (
-            <ImageSettingsPanel settings={settings} setSettings={setSettings} compact />
+            <ImageSettingsPanel settings={settings} setSettings={setSettings} narration={narration} compact />
           )}
 
           {activeTool === "data" && (
@@ -2407,12 +2407,10 @@ function TextModelPanel({
 function StorySettingsPanel({
   settings,
   setSettings,
-  narration,
   compact = false,
 }: {
   settings: StorySettings;
   setSettings: Dispatch<SetStateAction<StorySettings>>;
-  narration: ReturnType<typeof useNarration>;
   compact?: boolean;
 }) {
   const idPrefix = compact ? "mobile" : "desktop";
@@ -2457,10 +2455,12 @@ function StorySettingsPanel({
 function ImageSettingsPanel({
   settings,
   setSettings,
+  narration,
   compact = false,
 }: {
   settings: StorySettings;
   setSettings: Dispatch<SetStateAction<StorySettings>>;
+  narration: ReturnType<typeof useNarration>;
   compact?: boolean;
 }) {
   const idPrefix = compact ? "mobile" : "desktop";
