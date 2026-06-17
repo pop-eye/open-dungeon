@@ -111,11 +111,16 @@ def _gguf_repo(gguf_variant: str) -> str:
     return "ponpoke/flux2-klein-4b-uncensored-text-encoder"
 
 
-def _load_pipeline(*, model_id: str = "black-forest-labs/FLUX.2-klein-4B",
-                   gguf_variant: str = "4b") -> None:
+def _load_pipeline(*, quant: str = "q4_k_m") -> None:
+    """Load the uncensored FLUX.2-klein SDNQ pipeline once and keep it resident.
+
+    Reuses ultra-fast-image-gen's own loader (loaders.py) — the exact code path
+    the CLI uses — so the pipeline assembles identically (SDNQ transformer + VAE +
+    uncensored GGUF Qwen3 text encoder) and stays in VRAM between requests.
+    """
     global _PIPELINE, _PIPELINE_KEY, LOAD_SECONDS
 
-    pipeline_key = (model_id, gguf_variant)
+    pipeline_key = (DEVICE, quant)
     if _PIPELINE is not None and _PIPELINE_KEY == pipeline_key:
         return
 
@@ -124,51 +129,13 @@ def _load_pipeline(*, model_id: str = "black-forest-labs/FLUX.2-klein-4B",
         _PIPELINE_KEY = None
         _clear_cache()
 
-    token = _hf_token()
-    gguf_file = _gguf_filename(gguf_variant)
-    gguf_repo = _gguf_repo(gguf_variant)
-
-    print(f"[sdnq-resident] loading pipeline {model_id} on {DEVICE}", file=sys.stderr, flush=True)
-    print(f"[sdnq-resident] GGUF encoder: {gguf_repo}/{gguf_file}", file=sys.stderr, flush=True)
-    print(f"[sdnq-resident] HF token present: {bool(token)}", file=sys.stderr, flush=True)
-    print(f"[sdnq-resident] If models are not cached, expect a 7-10 GB download — this can take 10-30 min", file=sys.stderr, flush=True)
+    print(f"[sdnq-resident] loading pipeline on {DEVICE} (quant={quant})", file=sys.stderr, flush=True)
+    print(f"[sdnq-resident] HF token present: {bool(_hf_token())}", file=sys.stderr, flush=True)
+    print(f"[sdnq-resident] If models are not cached, expect a 7-10 GB download (10-30 min)", file=sys.stderr, flush=True)
     start = time.time()
 
-    try:
-        # Try importing ultra-fast-image-gen's sdnq backend directly.
-        # This mirrors how the mflux resident imports from the mflux checkout.
-        from sdnq_pipeline import build_pipeline  # type: ignore[import]
-        pipeline = build_pipeline(
-            model_id=model_id,
-            device=DEVICE,
-            gguf_file=gguf_file,
-            gguf_repo=gguf_repo,
-            hf_token=token,
-        )
-    except ImportError:
-        # Fallback: use diffusers FluxPipeline with SDNQ/GGUF text encoder via
-        # the ultra-fast-image-gen optimized loader, if available.
-        try:
-            from optimized_pipeline import build_sdnq_pipeline  # type: ignore[import]
-            pipeline = build_sdnq_pipeline(
-                model_id=model_id,
-                device=DEVICE,
-                gguf_file=gguf_file,
-                gguf_repo=gguf_repo,
-                hf_token=token,
-            )
-        except ImportError:
-            # Last resort: standard diffusers FluxPipeline with bfloat16.
-            # This still keeps the model in VRAM between requests and avoids reload.
-            import torch
-            from diffusers import FluxPipeline  # type: ignore[import]
-            dtype = torch.bfloat16
-            pipeline = FluxPipeline.from_pretrained(
-                model_id,
-                torch_dtype=dtype,
-                token=token,
-            )
-            pipeline = pipeline.to(DEVICE)
+    from loaders import load_flux2_klein_uncensored_pipeline  # type: ignore[import]
+    pipeline = load_flux2_klein_uncensored_pipeline(DEVICE, quant=quant)
 
     LOAD_SECONDS = time.time() - start
     _PIPELINE = pipeline
@@ -186,47 +153,75 @@ def _load_pipeline(*, model_id: str = "black-forest-labs/FLUX.2-klein-4B",
 def _generate(payload: dict[str, Any]) -> dict[str, Any]:
     global GENERATIONS
 
-    model_id = str(payload.get("model_id") or "black-forest-labs/FLUX.2-klein-4B")
-    gguf_variant = str(payload.get("gguf_variant") or "4b")
     prompt = str(payload["prompt"])
     width = int(payload.get("width") or 1024)
     height = int(payload.get("height") or 1024)
     steps = int(payload.get("steps") or 4)
     seed = int(payload.get("seed") or 1234)
     guidance = float(payload.get("guidance") or 0.0)
+    quant = str(payload.get("gguf_quant") or "q4_k_m")
     output_path = Path(payload["output_path"])
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    image_paths = [Path(p) for p in (payload.get("image_paths") or [])][:2]
+    image_paths = [Path(p) for p in (payload.get("image_paths") or []) if Path(p).exists()][:2]
 
-    _load_pipeline(model_id=model_id, gguf_variant=gguf_variant)
+    _load_pipeline(quant=quant)
     assert _PIPELINE is not None
+
+    import torch
+    from flux2_sdnq_hs import (  # type: ignore[import]
+        Flux2SdnqHsConfig,
+        install_flux2_sdnq_hs_optimizations,
+        reset_flux2_sdnq_hs_state,
+    )
 
     start = time.time()
 
-    import torch
-    generator = torch.Generator(device=DEVICE).manual_seed(seed)
-
-    gen_kwargs: dict[str, Any] = dict(
-        prompt=prompt,
-        width=width,
-        height=height,
-        num_inference_steps=steps,
-        generator=generator,
-        output_type="pil",
+    # Mirror generate.py's sdnq-hs config (CLI uses these exact values).
+    cfg = Flux2SdnqHsConfig.for_steps(
+        steps,
+        qchunk=1024,
+        hs_stride=2,
+        hs_skip_transformer_forwards=0,
+        hs_max_transformer_forward=max(0, steps - 1),
+        hs_single_start_frac=0.0,
+        hs_single_end_frac=1.0,
+        verbose=False,
     )
-    # guidance_scale=0 means distilled/CFG-free; pass only when non-zero
-    if guidance > 0:
-        gen_kwargs["guidance_scale"] = guidance
+    install_flux2_sdnq_hs_optimizations(_PIPELINE, cfg)
+    reset_flux2_sdnq_hs_state(_PIPELINE)
 
-    # img2img path: pass reference images if the pipeline supports it
-    if image_paths and hasattr(_PIPELINE, "image"):
+    gen_device = "cpu" if DEVICE == "mps" else DEVICE
+    generator = torch.Generator(device=gen_device).manual_seed(seed)
+
+    input_images = []
+    if image_paths:
         import PIL.Image
-        ref_images = [PIL.Image.open(str(p)).convert("RGB") for p in image_paths if p.exists()]
-        if ref_images:
-            gen_kwargs["image"] = ref_images[0] if len(ref_images) == 1 else ref_images
-            gen_kwargs["strength"] = 0.75
+        input_images = [
+            PIL.Image.open(str(p)).convert("RGB").resize((width, height))
+            for p in image_paths
+        ]
 
-    result = _PIPELINE(**gen_kwargs)
+    with torch.inference_mode():
+        if input_images:
+            result = _PIPELINE(
+                prompt=prompt,
+                image=input_images[0] if len(input_images) == 1 else input_images,
+                height=height,
+                width=width,
+                num_inference_steps=steps,
+                guidance_scale=guidance,
+                generator=generator,
+            )
+        else:
+            result = _PIPELINE(
+                prompt=prompt,
+                height=height,
+                width=width,
+                num_inference_steps=steps,
+                guidance_scale=guidance,
+                generator=generator,
+            )
+
     pil_image = result.images[0]
     pil_image.save(str(output_path))
 
@@ -240,10 +235,8 @@ def _generate(payload: dict[str, Any]) -> dict[str, Any]:
         "elapsedSeconds": round(elapsed, 2),
         "loadSeconds": round(LOAD_SECONDS or 0, 2),
         "generations": GENERATIONS,
-        "generationKind": "img2img" if image_paths else "txt2img",
-        "referenceCount": len(image_paths),
-        "modelId": model_id,
-        "ggufVariant": gguf_variant,
+        "generationKind": "img2img" if input_images else "txt2img",
+        "referenceCount": len(input_images),
         "device": DEVICE,
         **_memory_stats(),
     }
@@ -254,15 +247,12 @@ def _generate(payload: dict[str, Any]) -> dict[str, Any]:
 def _handle(payload: dict[str, Any]) -> dict[str, Any]:
     action = payload.get("action")
     if action == "load":
-        model_id = str(payload.get("model_id") or "black-forest-labs/FLUX.2-klein-4B")
-        gguf_variant = str(payload.get("gguf_variant") or "4b")
-        _load_pipeline(model_id=model_id, gguf_variant=gguf_variant)
+        quant = str(payload.get("gguf_quant") or "q4_k_m")
+        _load_pipeline(quant=quant)
         return {
             "loaded": True,
             "loadSeconds": round(LOAD_SECONDS or 0, 2),
             "generations": GENERATIONS,
-            "modelId": model_id,
-            "ggufVariant": gguf_variant,
             "device": DEVICE,
             **_memory_stats(),
         }
