@@ -4,15 +4,21 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 const VOICE_STORAGE_KEY = "open-dungeon:narration";
 
+export type NarrationBackend = "web" | "kokoro";
+
 type NarrationPrefs = {
   enabled: boolean;
-  voiceURI: string;
+  backend: NarrationBackend;
+  voiceURI: string; // Web Speech voiceURI
+  kokoroVoice: string;
   rate: number;
 };
 
 const DEFAULT_PREFS: NarrationPrefs = {
   enabled: false,
+  backend: "web",
   voiceURI: "",
+  kokoroVoice: "af_heart",
   rate: 1,
 };
 
@@ -27,8 +33,8 @@ function loadPrefs(): NarrationPrefs {
   }
 }
 
-// Prefer natural-sounding voices: Windows "Natural"/"Online" neural voices,
-// then any en-* voice, then the platform default.
+// Prefer natural-sounding Web Speech voices: Windows "Natural"/"Online" neural
+// voices first, then any en-* voice, then the platform default.
 function rankVoice(voice: SpeechSynthesisVoice): number {
   const name = voice.name.toLowerCase();
   let score = 0;
@@ -39,7 +45,6 @@ function rankVoice(voice: SpeechSynthesisVoice): number {
   return score;
 }
 
-// Strips markdown emphasis and dialogue asterisks so the spoken text is clean.
 function cleanForSpeech(text: string): string {
   return text
     .replace(/[*_#`>]/g, "")
@@ -47,39 +52,81 @@ function cleanForSpeech(text: string): string {
     .trim();
 }
 
+function lastSentenceBoundary(text: string): number {
+  return Math.max(
+    text.lastIndexOf(". "),
+    text.lastIndexOf("! "),
+    text.lastIndexOf("? "),
+    text.lastIndexOf(".\n"),
+    text.lastIndexOf("!\n"),
+    text.lastIndexOf("?\n"),
+  );
+}
+
 /**
- * Browser Web Speech narration that speaks text as it streams in.
+ * Narration with two backends:
+ *  - "web":   browser Web Speech API (zero setup, robotic-ish).
+ *  - "kokoro": local Kokoro-82M neural TTS via /api/tts (natural; needs the
+ *             tts:server running). Sentences are fetched as they stream in and
+ *             played in order, so synthesis of later sentences overlaps the
+ *             playback of earlier ones.
  *
- * `pushStreamingText` is called with the *full* accumulated passage on every
- * delta; the hook tracks how much it has already queued and only speaks newly
- * completed sentences, so audio starts on the first sentence and stays in sync
- * with the streaming prose.
+ * `pushStreamingText` receives the full accumulated passage on each delta and
+ * speaks only newly completed sentences.
  */
 export function useNarration() {
-  const [supported, setSupported] = useState(false);
+  const [webSupported, setWebSupported] = useState(false);
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [kokoroAvailable, setKokoroAvailable] = useState(false);
+  const [kokoroVoices, setKokoroVoices] = useState<string[]>([]);
   const [prefs, setPrefs] = useState<NarrationPrefs>(DEFAULT_PREFS);
   const [speaking, setSpeaking] = useState(false);
 
-  // How many characters of the current streaming passage we've already spoken.
-  const spokenLenRef = useRef(0);
   const prefsRef = useRef(prefs);
   prefsRef.current = prefs;
+  const kokoroAvailableRef = useRef(false);
+  kokoroAvailableRef.current = kokoroAvailable;
+
+  const spokenLenRef = useRef(0);
+  // Bumped on every new passage / stop so stale audio is discarded.
+  const genRef = useRef(0);
+  // Serializes Kokoro audio playback while fetches run concurrently.
+  const playChainRef = useRef<Promise<void>>(Promise.resolve());
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const activeRef = useRef(0);
 
   useEffect(() => {
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
-    setSupported(true);
+    const hasWeb = typeof window !== "undefined" && "speechSynthesis" in window;
+    let refreshVoices: (() => void) | null = null;
+
+    if (hasWeb) {
+      setWebSupported(true);
+      refreshVoices = () => {
+        const list = window.speechSynthesis.getVoices();
+        if (list.length) setVoices(list);
+      };
+      refreshVoices();
+      window.speechSynthesis.addEventListener("voiceschanged", refreshVoices);
+    }
+
     setPrefs(loadPrefs());
 
-    const refreshVoices = () => {
-      const list = window.speechSynthesis.getVoices();
-      if (list.length) setVoices(list);
-    };
-    refreshVoices();
-    window.speechSynthesis.addEventListener("voiceschanged", refreshVoices);
+    // Probe the local Kokoro server (don't block if it's down).
+    fetch("/api/tts", { method: "GET" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.ok || Array.isArray(data?.voices)) {
+          setKokoroAvailable(true);
+          if (Array.isArray(data.voices)) setKokoroVoices(data.voices as string[]);
+        }
+      })
+      .catch(() => {});
+
     return () => {
-      window.speechSynthesis.removeEventListener("voiceschanged", refreshVoices);
-      window.speechSynthesis.cancel();
+      if (hasWeb && refreshVoices) {
+        window.speechSynthesis.removeEventListener("voiceschanged", refreshVoices);
+        window.speechSynthesis.cancel();
+      }
     };
   }, []);
 
@@ -92,64 +139,133 @@ export function useNarration() {
     }
   }, []);
 
-  const pickVoice = useCallback((): SpeechSynthesisVoice | null => {
+  const pickWebVoice = useCallback((): SpeechSynthesisVoice | null => {
     if (!voices.length) return null;
     const chosen = voices.find((v) => v.voiceURI === prefsRef.current.voiceURI);
     if (chosen) return chosen;
     return [...voices].sort((a, b) => rankVoice(b) - rankVoice(a))[0] || null;
   }, [voices]);
 
-  const speak = useCallback(
+  const markIdleIfDone = useCallback(() => {
+    activeRef.current = Math.max(0, activeRef.current - 1);
+    if (activeRef.current === 0) setSpeaking(false);
+  }, []);
+
+  const speakWeb = useCallback(
     (text: string) => {
-      const clean = cleanForSpeech(text);
-      if (!clean) return;
-      const utterance = new SpeechSynthesisUtterance(clean);
-      const voice = pickVoice();
+      const utterance = new SpeechSynthesisUtterance(text);
+      const voice = pickWebVoice();
       if (voice) {
         utterance.voice = voice;
         utterance.lang = voice.lang;
       }
       utterance.rate = prefsRef.current.rate;
       utterance.onstart = () => setSpeaking(true);
-      utterance.onend = () => {
-        if (!window.speechSynthesis.speaking) setSpeaking(false);
-      };
+      utterance.onend = markIdleIfDone;
+      utterance.onerror = markIdleIfDone;
       window.speechSynthesis.speak(utterance);
     },
-    [pickVoice],
+    [pickWebVoice, markIdleIfDone],
+  );
+
+  const playKokoroBlob = useCallback(
+    (blobPromise: Promise<Blob>, gen: number): Promise<void> => {
+      return new Promise((resolve) => {
+        blobPromise
+          .then((blob) => {
+            if (gen !== genRef.current) {
+              markIdleIfDone();
+              return resolve();
+            }
+            const url = URL.createObjectURL(blob);
+            const audio = new Audio(url);
+            audioRef.current = audio;
+            const finish = () => {
+              URL.revokeObjectURL(url);
+              if (audioRef.current === audio) audioRef.current = null;
+              markIdleIfDone();
+              resolve();
+            };
+            audio.onended = finish;
+            audio.onerror = finish;
+            void audio.play().catch(finish);
+          })
+          .catch(() => {
+            markIdleIfDone();
+            resolve();
+          });
+      });
+    },
+    [markIdleIfDone],
+  );
+
+  const enqueueKokoro = useCallback(
+    (text: string) => {
+      const gen = genRef.current;
+      activeRef.current += 1;
+      setSpeaking(true);
+      // Kick the fetch off immediately so it overlaps prior playback.
+      const blobPromise = fetch("/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text,
+          voice: prefsRef.current.kokoroVoice,
+          speed: prefsRef.current.rate,
+        }),
+      }).then((res) => {
+        if (!res.ok) throw new Error("tts failed");
+        return res.blob();
+      });
+      playChainRef.current = playChainRef.current
+        .then(() => playKokoroBlob(blobPromise, gen))
+        .catch(() => {});
+    },
+    [playKokoroBlob],
+  );
+
+  const enqueueSpeech = useCallback(
+    (text: string) => {
+      const clean = cleanForSpeech(text);
+      if (!clean) return;
+      const useKokoro = prefsRef.current.backend === "kokoro" && kokoroAvailableRef.current;
+      if (useKokoro) {
+        enqueueKokoro(clean);
+      } else {
+        activeRef.current += 1;
+        setSpeaking(true);
+        speakWeb(clean);
+      }
+    },
+    [enqueueKokoro, speakWeb],
   );
 
   const stop = useCallback(() => {
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
-    window.speechSynthesis.cancel();
-    setSpeaking(false);
-  }, []);
-
-  // Begin a fresh passage: clear any in-flight speech and reset the cursor.
-  const beginPassage = useCallback(() => {
-    spokenLenRef.current = 0;
+    genRef.current += 1;
+    activeRef.current = 0;
+    playChainRef.current = Promise.resolve();
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
     if (typeof window !== "undefined" && "speechSynthesis" in window) {
       window.speechSynthesis.cancel();
     }
+    setSpeaking(false);
   }, []);
 
-  // Speak any newly completed sentences in the accumulated streaming text.
+  const beginPassage = useCallback(() => {
+    spokenLenRef.current = 0;
+    stop();
+  }, [stop]);
+
   const pushStreamingText = useCallback(
     (fullText: string, { flush = false }: { flush?: boolean } = {}) => {
       if (!prefsRef.current.enabled) return;
       const unspoken = fullText.slice(spokenLenRef.current);
       if (!unspoken) return;
 
-      // Find the last sentence boundary so we only speak complete sentences.
-      const boundary = Math.max(
-        unspoken.lastIndexOf(". "),
-        unspoken.lastIndexOf("! "),
-        unspoken.lastIndexOf("? "),
-        unspoken.lastIndexOf(".\n"),
-        unspoken.lastIndexOf("!\n"),
-        unspoken.lastIndexOf("?\n"),
-      );
-
+      const boundary = lastSentenceBoundary(unspoken);
       let chunk: string;
       if (flush) {
         chunk = unspoken;
@@ -160,34 +276,47 @@ export function useNarration() {
       }
 
       spokenLenRef.current += chunk.length;
-      speak(chunk);
+      enqueueSpeech(chunk);
     },
-    [speak],
+    [enqueueSpeech],
   );
 
-  // Speak a full, already-complete passage (non-streaming path).
   const speakWhole = useCallback(
     (text: string) => {
       if (!prefsRef.current.enabled) return;
       beginPassage();
       spokenLenRef.current = text.length;
-      speak(text);
+      enqueueSpeech(text);
     },
-    [beginPassage, speak],
+    [beginPassage, enqueueSpeech],
   );
 
+  const backendAvailable = (backend: NarrationBackend) =>
+    backend === "kokoro" ? kokoroAvailable : webSupported;
+
   return {
-    supported,
+    supported: webSupported || kokoroAvailable,
+    webSupported,
+    kokoroAvailable,
     voices,
+    kokoroVoices,
+    backendAvailable,
     enabled: prefs.enabled,
+    backend: prefs.backend,
     voiceURI: prefs.voiceURI,
+    kokoroVoice: prefs.kokoroVoice,
     rate: prefs.rate,
     speaking,
     setEnabled: (enabled: boolean) => {
       if (!enabled) stop();
       persist({ ...prefsRef.current, enabled });
     },
+    setBackend: (backend: NarrationBackend) => {
+      stop();
+      persist({ ...prefsRef.current, backend });
+    },
     setVoiceURI: (voiceURI: string) => persist({ ...prefsRef.current, voiceURI }),
+    setKokoroVoice: (kokoroVoice: string) => persist({ ...prefsRef.current, kokoroVoice }),
     setRate: (rate: number) => persist({ ...prefsRef.current, rate }),
     beginPassage,
     pushStreamingText,

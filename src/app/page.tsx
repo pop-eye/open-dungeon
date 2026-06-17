@@ -2535,21 +2535,64 @@ function ImageSettingsPanel({
           </label>
           {narration.enabled && (
             <>
-              <select
-                aria-label="Narration voice"
-                value={narration.voiceURI}
-                onChange={(event) => narration.setVoiceURI(event.target.value)}
-                className="w-full rounded border border-stone-800 bg-stone-900 px-2 py-1.5 text-sm text-stone-200"
-              >
-                <option value="">Auto (best available)</option>
-                {narration.voices
-                  .filter((voice) => voice.lang.toLowerCase().startsWith("en"))
-                  .map((voice) => (
-                    <option key={voice.voiceURI} value={voice.voiceURI}>
-                      {voice.name}
+              {narration.kokoroAvailable && (
+                <div className="flex gap-1 rounded border border-stone-800 bg-stone-900 p-1 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => narration.setBackend("kokoro")}
+                    className={cn(
+                      "flex-1 rounded px-2 py-1",
+                      narration.backend === "kokoro"
+                        ? "bg-amber-200 text-stone-900"
+                        : "text-stone-300 hover:bg-stone-800",
+                    )}
+                  >
+                    Kokoro (neural)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => narration.setBackend("web")}
+                    className={cn(
+                      "flex-1 rounded px-2 py-1",
+                      narration.backend === "web"
+                        ? "bg-amber-200 text-stone-900"
+                        : "text-stone-300 hover:bg-stone-800",
+                    )}
+                  >
+                    Browser
+                  </button>
+                </div>
+              )}
+              {narration.backend === "kokoro" ? (
+                <select
+                  aria-label="Kokoro voice"
+                  value={narration.kokoroVoice}
+                  onChange={(event) => narration.setKokoroVoice(event.target.value)}
+                  className="w-full rounded border border-stone-800 bg-stone-900 px-2 py-1.5 text-sm text-stone-200"
+                >
+                  {narration.kokoroVoices.map((voice) => (
+                    <option key={voice} value={voice}>
+                      {voice}
                     </option>
                   ))}
-              </select>
+                </select>
+              ) : (
+                <select
+                  aria-label="Narration voice"
+                  value={narration.voiceURI}
+                  onChange={(event) => narration.setVoiceURI(event.target.value)}
+                  className="w-full rounded border border-stone-800 bg-stone-900 px-2 py-1.5 text-sm text-stone-200"
+                >
+                  <option value="">Auto (best available)</option>
+                  {narration.voices
+                    .filter((voice) => voice.lang.toLowerCase().startsWith("en"))
+                    .map((voice) => (
+                      <option key={voice.voiceURI} value={voice.voiceURI}>
+                        {voice.name}
+                      </option>
+                    ))}
+                </select>
+              )}
               <label className="flex items-center justify-between gap-3 text-xs text-stone-500">
                 Speed
                 <input
