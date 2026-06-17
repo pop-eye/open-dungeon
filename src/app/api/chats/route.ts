@@ -17,6 +17,7 @@ const settingsSchema = z.object({
   imageBackend: z.enum(["mflux-hs", "sdnq-hs", "comfyui-flux-gguf"]).optional(),
   aspect: z.enum(["square", "portrait", "landscape"]).optional(),
   autoImages: z.boolean().optional(),
+  imageStyle: z.string().optional(),
 });
 
 const createChatSchema = z.object({

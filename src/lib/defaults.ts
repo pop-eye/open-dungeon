@@ -17,6 +17,8 @@ export const DEFAULT_STORY_SETTINGS: StorySettings = {
   imageBackend: "sdnq-hs",
   aspect: "square",
   autoImages: true,
+  imageStyle:
+    "cinematic concept art, cohesive painterly digital illustration, consistent muted color palette, dramatic volumetric lighting, detailed and atmospheric, no text",
 };
 
 export function titleFromInput(input: string) {

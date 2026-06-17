@@ -69,6 +69,17 @@ const INPUT_MODES: Array<{ value: InputMode; label: string; placeholder: string 
   { value: "story", label: "Story", placeholder: "Write the next part of the story…" },
 ];
 
+// Deterministic 31-bit seed from a chat ID (FNV-1a) so every image in a story
+// reuses the same noise seed for a coherent look. Different stories differ.
+function seedFromChatId(chatId: string): number {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < chatId.length; i += 1) {
+    hash ^= chatId.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0) % 2_147_483_647;
+}
+
 function formatPlayerInput(mode: InputMode, text: string): string {
   const trimmed = text.trim();
   if (mode === "say") {
@@ -88,6 +99,8 @@ const STORY_PRESETS = [
     flavor: "Knights, magic, old roads",
     seed: "A high-fantasy realm of feuding kingdoms, old magic, and roads that stop being safe after dark.",
     rolePlaceholder: "a wandering sellsword",
+    imageStyle:
+      "epic high-fantasy concept art, painterly digital illustration, rich earthy color palette, dramatic natural lighting, detailed and atmospheric, no text",
   },
   {
     id: "mystery",
@@ -95,6 +108,8 @@ const STORY_PRESETS = [
     flavor: "Rain, secrets, loose threads",
     seed: "A rain-slicked city full of secrets, where every case is a door somebody wants kept shut.",
     rolePlaceholder: "a private investigator",
+    imageStyle:
+      "film-noir detective illustration, moody cinematic lighting, rain and shadow, desaturated cool color palette, high contrast, no text",
   },
   {
     id: "cyberpunk",
@@ -102,6 +117,8 @@ const STORY_PRESETS = [
     flavor: "Neon, chrome, bad debts",
     seed: "A neon-drenched megacity run by corporations, where memory is currency and everyone owes someone.",
     rolePlaceholder: "a burned-out netrunner",
+    imageStyle:
+      "cyberpunk concept art, neon-lit rainy night, teal and magenta color palette, cinematic volumetric lighting, gritty detailed, no text",
   },
   {
     id: "apocalyptic",
@@ -109,6 +126,8 @@ const STORY_PRESETS = [
     flavor: "After the end of everything",
     seed: "Years after the collapse, scattered survivors scavenge, barter, and tell stories about how it used to be.",
     rolePlaceholder: "a scavenger with a map",
+    imageStyle:
+      "post-apocalyptic concept art, dusty muted earth tones, harsh overcast lighting, weathered detailed environments, cinematic, no text",
   },
   {
     id: "horror",
@@ -116,6 +135,8 @@ const STORY_PRESETS = [
     flavor: "Something is wrong here",
     seed: "A remote town where the nights run long and the locals don't talk about what happens in them.",
     rolePlaceholder: "an out-of-town visitor",
+    imageStyle:
+      "atmospheric horror illustration, dim low-key lighting, deep shadows, desaturated sickly color palette, eerie cinematic, fine grain, no text",
   },
   {
     id: "romance",
@@ -123,6 +144,8 @@ const STORY_PRESETS = [
     flavor: "Sparks in unlikely places",
     seed: "A close-knit coastal town in late summer, where chance meetings have a way of becoming something more.",
     rolePlaceholder: "a newcomer with a past",
+    imageStyle:
+      "warm romantic illustration, soft golden-hour lighting, gentle pastel color palette, intimate cinematic framing, painterly, no text",
   },
 ] as const;
 
@@ -640,6 +663,10 @@ export default function Home() {
           mode: imageRequest?.mode || settings.imageMode,
           backend: imageRequest?.backend || settings.imageBackend,
           aspect: imageRequest?.aspect || settings.aspect,
+          style: settings.imageStyle || "",
+          // Stable per-story seed so every image shares noise initialization,
+          // keeping palette/lighting/character coherence across the story.
+          seed: seedFromChatId(selectedChatId),
           references: refs,
         }),
       });
@@ -957,13 +984,18 @@ export default function Home() {
   async function beginStory(options: {
     title: string;
     world: string;
+    imageStyle?: string;
     opening: { mode: "narrator"; hint: string } | { mode: "self"; text: string };
   }) {
     setNewStoryOpen(false);
     setError("");
 
     try {
-      const seedSettings: StorySettings = { ...settings, world: options.world };
+      const seedSettings: StorySettings = {
+        ...settings,
+        world: options.world,
+        ...(options.imageStyle ? { imageStyle: options.imageStyle } : {}),
+      };
       const response = await fetch("/api/chats", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1411,6 +1443,7 @@ function NewStoryDialog({
   onBegin: (options: {
     title: string;
     world: string;
+    imageStyle?: string;
     opening: { mode: "narrator"; hint: string } | { mode: "self"; text: string };
   }) => void;
 }) {
@@ -1447,6 +1480,7 @@ function NewStoryDialog({
       title: titleFromInput(
         name.trim() ? `${name.trim()} · ${preset.label}` : `${preset.label} · ${persona}`,
       ),
+      imageStyle: preset.imageStyle,
       opening,
     });
   }

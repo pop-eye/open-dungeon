@@ -14,6 +14,9 @@ const requestSchema = z.object({
   mode: z.enum(["fast", "slow"]).default("slow"),
   backend: z.enum(["mflux-hs", "sdnq-hs", "comfyui-flux-gguf"]).default("sdnq-hs"),
   aspect: z.enum(["square", "portrait", "landscape"]).default("square"),
+  // Fixed per-story art-direction appended to the scene prompt for a
+  // consistent look across every image in a story.
+  style: z.string().default(""),
   seed: z.number().int().optional(),
   references: z
     .array(
@@ -34,12 +37,17 @@ export async function POST(request: Request) {
   const workerUrl = serverEnv("FLUX_WORKER_URL", "http://127.0.0.1:7869");
   const dimensions = dimensionsForImage(body.mode, body.aspect);
 
+  // Anchor every image to the story's fixed art-direction so the look stays
+  // consistent turn to turn, regardless of how the per-scene prompt is worded.
+  const style = body.style.trim();
+  const prompt = style ? `${body.prompt.trim()}. Style: ${style}` : body.prompt;
+
   try {
     const upstream = await fetch(`${workerUrl.replace(/\/$/, "")}/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        prompt: body.prompt,
+        prompt,
         mode: body.mode,
         backend: body.backend,
         aspect: body.aspect,

@@ -65,6 +65,10 @@ export type StorySettings = {
   imageBackend: ImageBackend;
   aspect: AspectPreset;
   autoImages: boolean;
+  // Fixed art-direction appended to every image prompt in this story so the
+  // medium, palette, and lighting stay consistent turn to turn. Set once when
+  // the story is created (derived from its genre); editable later.
+  imageStyle: string;
 };
 
 export type StoryChatSummary = {
