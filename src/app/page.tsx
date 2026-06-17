@@ -37,6 +37,7 @@ import {
 } from "react";
 import { cn } from "@/lib/cn";
 import { DEFAULT_STORY_SETTINGS, titleFromInput } from "@/lib/defaults";
+import { useNarration } from "@/lib/use-narration";
 import { LOCAL_TEXT_MODELS, type LocalTextModelId, type TextProvider } from "@/lib/text-models";
 import type {
   AspectPreset,
@@ -262,6 +263,7 @@ export default function Home() {
   const lastSavedSettingsRef = useRef(JSON.stringify(DEFAULT_STORY_SETTINGS));
   const fileInputRef = useRef<HTMLInputElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  const narration = useNarration();
 
   const activeChat = useMemo(
     () => chats.find((chat) => chat.id === selectedChatId),
@@ -706,6 +708,7 @@ export default function Home() {
           const type = event.type;
           if (type === "start") {
             finalId = typeof event.id === "string" ? event.id : finalId;
+            narration.beginPassage();
             setMessages((current) => [
               ...current,
               {
@@ -720,6 +723,7 @@ export default function Home() {
             const text = typeof event.text === "string" ? event.text : "";
             if (!text) return;
             finalContent += text;
+            narration.pushStreamingText(finalContent);
             setMessages((current) =>
               current.map((message) =>
                 message.id === finalId ? { ...message, content: finalContent } : message,
@@ -730,6 +734,8 @@ export default function Home() {
             finalContent =
               typeof event.content === "string" ? event.content : finalContent;
             finalImageRequest = event.imageRequest as StoryMessage["imageRequest"];
+            // Speak any trailing text that didn't end on a sentence boundary.
+            narration.pushStreamingText(finalContent, { flush: true });
             setMessages((current) =>
               current.map((message) =>
                 message.id === finalId
@@ -778,6 +784,7 @@ export default function Home() {
         finalContent = payload.content;
         finalImageRequest = payload.imageRequest;
 
+        narration.speakWhole(finalContent);
         setMessages((current) => [
           ...current,
           {
@@ -1378,7 +1385,7 @@ export default function Home() {
                 localTextStatus={localTextStatus}
               />
 
-              <StorySettingsPanel settings={settings} setSettings={setSettings} />
+              <StorySettingsPanel settings={settings} setSettings={setSettings} narration={narration} />
 
               <ImageSettingsPanel settings={settings} setSettings={setSettings} />
 
@@ -1769,7 +1776,7 @@ function MobileToolsSheet({
                 localTextStatus={localTextStatus}
                 compact
               />
-              <StorySettingsPanel settings={settings} setSettings={setSettings} compact />
+              <StorySettingsPanel settings={settings} setSettings={setSettings} narration={narration} compact />
             </div>
           )}
 
@@ -2400,10 +2407,12 @@ function TextModelPanel({
 function StorySettingsPanel({
   settings,
   setSettings,
+  narration,
   compact = false,
 }: {
   settings: StorySettings;
   setSettings: Dispatch<SetStateAction<StorySettings>>;
+  narration: ReturnType<typeof useNarration>;
   compact?: boolean;
 }) {
   const idPrefix = compact ? "mobile" : "desktop";
@@ -2511,6 +2520,64 @@ function ImageSettingsPanel({
           className="size-4 accent-amber-200"
         />
       </label>
+      {narration.supported && (
+        <div className="space-y-2 rounded border border-stone-800 bg-stone-950 px-3 py-2">
+          <label className="flex items-center justify-between text-sm text-stone-300">
+            Narrate aloud
+            <input
+              id={`${idPrefix}-narrate`}
+              name={`${idPrefix}-narrate`}
+              type="checkbox"
+              checked={narration.enabled}
+              onChange={(event) => narration.setEnabled(event.target.checked)}
+              className="size-4 accent-amber-200"
+            />
+          </label>
+          {narration.enabled && (
+            <>
+              <select
+                aria-label="Narration voice"
+                value={narration.voiceURI}
+                onChange={(event) => narration.setVoiceURI(event.target.value)}
+                className="w-full rounded border border-stone-800 bg-stone-900 px-2 py-1.5 text-sm text-stone-200"
+              >
+                <option value="">Auto (best available)</option>
+                {narration.voices
+                  .filter((voice) => voice.lang.toLowerCase().startsWith("en"))
+                  .map((voice) => (
+                    <option key={voice.voiceURI} value={voice.voiceURI}>
+                      {voice.name}
+                    </option>
+                  ))}
+              </select>
+              <label className="flex items-center justify-between gap-3 text-xs text-stone-500">
+                Speed
+                <input
+                  type="range"
+                  min={0.6}
+                  max={1.4}
+                  step={0.1}
+                  value={narration.rate}
+                  onChange={(event) => narration.setRate(Number(event.target.value))}
+                  className="flex-1 accent-amber-200"
+                />
+                <span className="w-8 text-right tabular-nums text-stone-400">
+                  {narration.rate.toFixed(1)}x
+                </span>
+              </label>
+              {narration.speaking && (
+                <button
+                  type="button"
+                  onClick={narration.stop}
+                  className="w-full rounded border border-stone-700 px-2 py-1 text-xs text-stone-300 hover:bg-stone-900"
+                >
+                  Stop narration
+                </button>
+              )}
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
