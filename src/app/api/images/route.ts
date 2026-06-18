@@ -29,6 +29,20 @@ const requestSchema = z.object({
       }),
     )
     .default([]),
+  // Canonical character design portraits used as face-swap sources (locks the
+  // character's face onto the generated scene). Kept separate from img2img
+  // references so they don't reshape the whole composition.
+  faceSources: z
+    .array(
+      z.object({
+        id: z.string(),
+        name: z.string(),
+        type: z.string(),
+        url: z.string(),
+        dataUrl: z.string().optional(),
+      }),
+    )
+    .default([]),
 });
 
 export async function POST(request: Request) {
@@ -60,6 +74,11 @@ export async function POST(request: Request) {
           name: reference.name,
           dataUrl: reference.dataUrl,
           url: reference.url,
+        })),
+        faceSources: body.faceSources.slice(0, MAX_IMAGE_REFERENCES).map((source) => ({
+          name: source.name,
+          dataUrl: source.dataUrl,
+          url: source.url,
         })),
       }),
     });

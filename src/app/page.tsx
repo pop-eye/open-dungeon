@@ -543,6 +543,26 @@ export default function Home() {
     [characters],
   );
 
+  // Canonical character design portraits for the referenced characters, used
+  // as face-swap sources so the character's face is locked onto the scene.
+  const faceSourcesForImage = useCallback(
+    (characterIds: string[] | undefined): Attachment[] => {
+      const seen = new Set<string>();
+      return (characterIds || [])
+        .flatMap((id) => {
+          const portrait = characters.find((c) => c.id === id)?.portrait;
+          return portrait ? [portrait] : [];
+        })
+        .filter((p) => {
+          if (seen.has(p.id)) return false;
+          seen.add(p.id);
+          return true;
+        })
+        .slice(0, MAX_IMAGE_REFERENCES);
+    },
+    [characters],
+  );
+
   // Build a stable character appearance prefix for image prompts. When a
   // character has a saved 'details' description, prepend it so the model can't
   // invent a different look each turn. This is the single biggest lever for
@@ -644,6 +664,55 @@ export default function Home() {
     }
   }
 
+  // Generate a canonical "character design" portrait from the character's
+  // Details, in the story's art style, and save it as the portrait. This single
+  // image becomes the face-swap source for every future scene with them, which
+  // is what keeps their face consistent across the story.
+  async function generateCharacterDesign(characterId: string, details: string) {
+    const description = details.trim();
+    if (!selectedChatId || !description) {
+      setError("Add a physical description first so the design has something to lock onto.");
+      return;
+    }
+
+    setCharacterUploadingId(characterId);
+    setError("");
+
+    try {
+      const prompt =
+        `Character reference portrait. ${description}. ` +
+        "Head-and-shoulders to waist, facing camera, neutral expression, even lighting, " +
+        "plain simple background, clear unobstructed face.";
+
+      const response = await fetch("/api/images", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt,
+          mode: settings.imageMode,
+          backend: settings.imageBackend,
+          aspect: "portrait",
+          style: settings.imageStyle || "",
+          // Deterministic per-character seed so re-rolling a design is stable.
+          seed: seedFromChatId(`${selectedChatId}:${characterId}`),
+        }),
+      });
+      const generatedImage = await readApi<GeneratedImage>(response);
+
+      const portrait: Attachment = {
+        id: generatedImage.id,
+        name: "Character design",
+        type: "image/png",
+        url: generatedImage.url,
+      };
+      await updateCharacterById(characterId, { portrait });
+    } catch (designError) {
+      setError(designError instanceof Error ? designError.message : "Character design failed.");
+    } finally {
+      setCharacterUploadingId("");
+    }
+  }
+
   async function deleteCharacterById(characterId: string) {
     if (!selectedChatId) {
       return;
@@ -668,6 +737,7 @@ export default function Home() {
     prompt: string,
     refs: Attachment[],
     imageRequest?: StoryMessage["imageRequest"],
+    faceSources: Attachment[] = [],
   ) {
     setImageStatus((current) => ({ ...current, [messageId]: "loading" }));
 
@@ -686,6 +756,8 @@ export default function Home() {
           // keeping palette/lighting/character coherence across the story.
           seed: seedFromChatId(selectedChatId),
           references: refs,
+          // Canonical character design portraits, face-swapped onto the scene.
+          faceSources,
         }),
       });
       const generatedImage = await readApi<GeneratedImage>(response);
@@ -849,8 +921,9 @@ export default function Home() {
         void requestGeneratedImage(
           finalId,
           appearancePrefix + finalImageRequest.prompt,
-          referencesForImage(finalImageRequest.characterIds, opts.attachments || []),
+          referencesForImage(undefined, opts.attachments || []),
           finalImageRequest,
+          faceSourcesForImage(finalImageRequest.characterIds),
         );
       }
     } catch (storyError) {
@@ -1157,6 +1230,9 @@ export default function Home() {
           }
           onPortraitFile={(characterId, file) => void uploadCharacterPortrait(file, characterId)}
           onClearPortrait={(characterId) => void updateCharacterById(characterId, { portrait: null })}
+          onGenerateDesign={(characterId, details) =>
+            void generateCharacterDesign(characterId, details)
+          }
           onDeleteCharacter={(characterId) => void deleteCharacterById(characterId)}
           settings={settings}
           setSettings={setSettings}
@@ -1241,11 +1317,9 @@ export default function Home() {
                                   message.id,
                                   characterAppearancePrefix(message.imageRequest.characterIds) +
                                     message.imageRequest.prompt,
-                                  referencesForImage(
-                                    message.imageRequest.characterIds,
-                                    lastUserAttachments,
-                                  ),
+                                  referencesForImage(undefined, lastUserAttachments),
                                   message.imageRequest,
+                                  faceSourcesForImage(message.imageRequest.characterIds),
                                 )
                               }
                             />
@@ -1428,6 +1502,9 @@ export default function Home() {
                 }
                 onPortraitFile={(characterId, file) => void uploadCharacterPortrait(file, characterId)}
                 onClearPortrait={(characterId) => void updateCharacterById(characterId, { portrait: null })}
+                onGenerateDesign={(characterId, details) =>
+                  void generateCharacterDesign(characterId, details)
+                }
                 onDelete={(characterId) => void deleteCharacterById(characterId)}
               />
 
@@ -1714,6 +1791,7 @@ function MobileToolsSheet({
   onSaveCharacter,
   onPortraitFile,
   onClearPortrait,
+  onGenerateDesign,
   onDeleteCharacter,
   settings,
   setSettings,
@@ -1739,6 +1817,7 @@ function MobileToolsSheet({
   onSaveCharacter: (character: StoryCharacter) => void;
   onPortraitFile: (characterId: string, file: File) => void;
   onClearPortrait: (characterId: string) => void;
+  onGenerateDesign: (characterId: string, details: string) => void;
   onDeleteCharacter: (characterId: string) => void;
   settings: StorySettings;
   setSettings: Dispatch<SetStateAction<StorySettings>>;
@@ -1817,6 +1896,7 @@ function MobileToolsSheet({
               onSave={onSaveCharacter}
               onPortraitFile={onPortraitFile}
               onClearPortrait={onClearPortrait}
+              onGenerateDesign={onGenerateDesign}
               onDelete={onDeleteCharacter}
               compact
             />
@@ -2001,6 +2081,7 @@ function CharacterPanel({
   onSave,
   onPortraitFile,
   onClearPortrait,
+  onGenerateDesign,
   onDelete,
   compact = false,
 }: {
@@ -2018,6 +2099,7 @@ function CharacterPanel({
   onSave: (character: StoryCharacter) => void;
   onPortraitFile: (characterId: string, file: File) => void;
   onClearPortrait: (characterId: string) => void;
+  onGenerateDesign: (characterId: string, details: string) => void;
   onDelete: (characterId: string) => void;
   compact?: boolean;
 }) {
@@ -2197,6 +2279,24 @@ function CharacterPanel({
                   )}
                   Photo
                 </label>
+                <button
+                  type="button"
+                  onClick={() => onGenerateDesign(character.id, character.details)}
+                  disabled={uploadingId === character.id || !character.details.trim()}
+                  title={
+                    character.details.trim()
+                      ? "Generate a canonical design portrait from the description"
+                      : "Add a physical description first"
+                  }
+                  className="inline-flex h-8 items-center gap-2 rounded border border-stone-800 px-2 text-xs text-stone-400 hover:bg-stone-900 hover:text-stone-200 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {uploadingId === character.id ? (
+                    <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+                  ) : (
+                    <Sparkles className="size-3.5" aria-hidden="true" />
+                  )}
+                  {character.portrait ? "Redesign" : "Design"}
+                </button>
                 {character.portrait && (
                   <button
                     type="button"

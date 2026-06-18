@@ -26,6 +26,10 @@ from urllib.parse import urlparse
 
 _IS_WINDOWS = sys.platform == "win32"
 
+# Optional face-swap post-processing (degrades gracefully if deps are missing).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import face_swap  # noqa: E402
+
 
 def _kill_process(proc: subprocess.Popen, force: bool = False) -> None:
     """Terminate a subprocess in a cross-platform way."""
@@ -183,7 +187,7 @@ def prepare_reference_paths(references: list[dict[str, Any]], image_id: str) -> 
             reference_paths.append(path)
             continue
 
-        if url.startswith("/uploads/"):
+        if url.startswith("/uploads/") or url.startswith("/generated/"):
             path = APP_ROOT / "public" / url.lstrip("/")
             if path.exists():
                 reference_paths.append(path)
@@ -668,6 +672,12 @@ def run_generation(payload: dict[str, Any]) -> dict[str, Any]:
         payload.get("references") or [],
         image_id,
     )
+    # Canonical character design portraits used as face-swap sources (kept
+    # separate from img2img references so they don't reshape the whole scene).
+    face_source_paths, _face_warnings = prepare_reference_paths(
+        payload.get("faceSources") or [],
+        f"{image_id}-face",
+    )
     start = time.time()
     log = ""
     resident = False
@@ -789,9 +799,31 @@ def run_generation(payload: dict[str, Any]) -> dict[str, Any]:
         if not output_path.exists():
             raise RuntimeError(f"{backend} completed but did not write {output_path}\n{log}")
 
+    # Lock character faces: swap each canonical design face onto the scene.
+    face_swap_meta: dict[str, Any] = {"applied": False}
+    if face_source_paths and face_swap.is_enabled():
+        face_swap_meta = face_swap.swap_faces(output_path, face_source_paths)
+        if face_swap_meta.get("applied"):
+            print(
+                f"[image-server] face-swap applied ({face_swap_meta.get('facesSwapped')} face(s))",
+                flush=True,
+            )
+        else:
+            print(
+                f"[image-server] face-swap skipped: {face_swap_meta.get('reason')}",
+                flush=True,
+            )
+
     warnings = reference_warnings
     if payload.get("references") and not reference_paths:
         warnings.append("No usable local reference images were provided.")
+    if (
+        payload.get("faceSources")
+        and face_swap.is_enabled()
+        and not face_swap_meta.get("applied")
+        and face_swap_meta.get("reason")
+    ):
+        warnings.append(f"Face-swap skipped: {face_swap_meta.get('reason')}")
 
     return {
         "id": image_id,
@@ -808,6 +840,7 @@ def run_generation(payload: dict[str, Any]) -> dict[str, Any]:
         "seed": seed,
         "resident": resident,
         "residentMeta": resident_meta,
+        "faceSwap": face_swap_meta,
         "warnings": warnings,
         "logTail": log[-4000:],
     }
