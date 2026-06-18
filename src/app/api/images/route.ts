@@ -17,6 +17,7 @@ const requestSchema = z.object({
   // Fixed per-story art-direction appended to the scene prompt for a
   // consistent look across every image in a story.
   style: z.string().default(""),
+  faceSwapEnabled: z.boolean().default(true),
   seed: z.number().int().optional(),
   references: z
     .array(
@@ -75,11 +76,13 @@ export async function POST(request: Request) {
           dataUrl: reference.dataUrl,
           url: reference.url,
         })),
-        faceSources: body.faceSources.slice(0, MAX_IMAGE_REFERENCES).map((source) => ({
-          name: source.name,
-          dataUrl: source.dataUrl,
-          url: source.url,
-        })),
+        faceSources: body.faceSwapEnabled
+          ? body.faceSources.slice(0, MAX_IMAGE_REFERENCES).map((source) => ({
+              name: source.name,
+              dataUrl: source.dataUrl,
+              url: source.url,
+            }))
+          : [],
       }),
     });
 

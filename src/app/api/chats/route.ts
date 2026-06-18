@@ -18,6 +18,7 @@ const settingsSchema = z.object({
   aspect: z.enum(["square", "portrait", "landscape"]).optional(),
   autoImages: z.boolean().optional(),
   imageStyle: z.string().optional(),
+  faceSwapEnabled: z.boolean().optional(),
 });
 
 const createChatSchema = z.object({

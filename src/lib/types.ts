@@ -69,6 +69,9 @@ export type StorySettings = {
   // medium, palette, and lighting stay consistent turn to turn. Set once when
   // the story is created (derived from its genre); editable later.
   imageStyle: string;
+  // Run InsightFace face-swap after each scene image so characters keep their
+  // canonical face. Requires FACE_SWAP_ENABLED on the image server.
+  faceSwapEnabled: boolean;
 };
 
 export type StoryChatSummary = {

@@ -608,6 +608,11 @@ export default function Home() {
       ]);
       setCharacterDraft({ name: "", details: "" });
       void refreshChats();
+      // Auto-generate a canonical design portrait when the character has a
+      // description so face-swap has a source from the very first scene.
+      if (payload.character.details.trim() && !payload.character.portrait) {
+        void generateCharacterDesign(payload.character.id, payload.character.details);
+      }
     } catch (characterError) {
       setError(characterError instanceof Error ? characterError.message : "Character failed to save.");
     } finally {
@@ -668,11 +673,17 @@ export default function Home() {
   // Details, in the story's art style, and save it as the portrait. This single
   // image becomes the face-swap source for every future scene with them, which
   // is what keeps their face consistent across the story.
-  async function generateCharacterDesign(characterId: string, details: string) {
+  // Returns the generated portrait so callers that need to use it immediately
+  // (e.g. face-swap on the very next scene) don't have to wait for a React
+  // state cycle to propagate the update through characters[].
+  async function generateCharacterDesign(
+    characterId: string,
+    details: string,
+  ): Promise<Attachment | null> {
     const description = details.trim();
     if (!selectedChatId || !description) {
       setError("Add a physical description first so the design has something to lock onto.");
-      return;
+      return null;
     }
 
     setCharacterUploadingId(characterId);
@@ -706,8 +717,10 @@ export default function Home() {
         url: generatedImage.url,
       };
       await updateCharacterById(characterId, { portrait });
+      return portrait;
     } catch (designError) {
       setError(designError instanceof Error ? designError.message : "Character design failed.");
+      return null;
     } finally {
       setCharacterUploadingId("");
     }
@@ -752,11 +765,11 @@ export default function Home() {
           backend: imageRequest?.backend || settings.imageBackend,
           aspect: imageRequest?.aspect || settings.aspect,
           style: settings.imageStyle || "",
+          faceSwapEnabled: settings.faceSwapEnabled ?? true,
           // Stable per-story seed so every image shares noise initialization,
           // keeping palette/lighting/character coherence across the story.
           seed: seedFromChatId(selectedChatId),
           references: refs,
-          // Canonical character design portraits, face-swapped onto the scene.
           faceSources,
         }),
       });
@@ -917,13 +930,44 @@ export default function Home() {
       void refreshChats();
 
       if (finalImageRequest?.needed && finalImageRequest.prompt) {
+        // Auto-generate designs for referenced characters that lack a portrait,
+        // wait for them all, then fire the scene so face-swap has a source.
+        // Collect the freshly generated portraits here so we don't depend on
+        // a React state cycle to propagate them through characters[].
+        const needsDesign = (finalImageRequest.characterIds ?? [])
+          .map((id) => characters.find((c) => c.id === id))
+          .filter((c): c is StoryCharacter => !!c && !!c.details.trim() && !c.portrait);
+
+        const freshPortraits = new Map<string, Attachment>();
+        if (needsDesign.length) {
+          const results = await Promise.allSettled(
+            needsDesign.map((c) =>
+              generateCharacterDesign(c.id, c.details).then((p) => ({ id: c.id, portrait: p })),
+            ),
+          );
+          for (const r of results) {
+            if (r.status === "fulfilled" && r.value.portrait) {
+              freshPortraits.set(r.value.id, r.value.portrait);
+            }
+          }
+        }
+
+        // Build face sources, preferring the fresh portrait if state hasn't
+        // caught up yet.
+        const faceSources = (finalImageRequest.characterIds ?? []).flatMap((id) => {
+          const fresh = freshPortraits.get(id);
+          if (fresh) return [fresh];
+          const existing = characters.find((c) => c.id === id)?.portrait;
+          return existing ? [existing] : [];
+        });
+
         const appearancePrefix = characterAppearancePrefix(finalImageRequest.characterIds);
         void requestGeneratedImage(
           finalId,
           appearancePrefix + finalImageRequest.prompt,
           referencesForImage(undefined, opts.attachments || []),
           finalImageRequest,
-          faceSourcesForImage(finalImageRequest.characterIds),
+          faceSources,
         );
       }
     } catch (storyError) {
@@ -2670,6 +2714,19 @@ function ImageSettingsPanel({
           checked={settings.autoImages}
           onChange={(event) =>
             setSettings((current) => ({ ...current, autoImages: event.target.checked }))
+          }
+          className="size-4 accent-amber-200"
+        />
+      </label>
+      <label className="flex items-center justify-between rounded border border-stone-800 bg-stone-950 px-3 py-2 text-sm text-stone-300">
+        Face-swap consistency
+        <input
+          id={`${idPrefix}-face-swap`}
+          name={`${idPrefix}-face-swap`}
+          type="checkbox"
+          checked={settings.faceSwapEnabled ?? true}
+          onChange={(event) =>
+            setSettings((current) => ({ ...current, faceSwapEnabled: event.target.checked }))
           }
           className="size-4 accent-amber-200"
         />

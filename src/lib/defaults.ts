@@ -19,6 +19,7 @@ export const DEFAULT_STORY_SETTINGS: StorySettings = {
   autoImages: true,
   imageStyle:
     "cinematic concept art, cohesive painterly digital illustration, consistent muted color palette, dramatic volumetric lighting, detailed and atmospheric, no text",
+  faceSwapEnabled: true,
 };
 
 export function titleFromInput(input: string) {
