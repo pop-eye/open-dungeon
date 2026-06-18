@@ -962,10 +962,21 @@ export default function Home() {
         });
 
         const appearancePrefix = characterAppearancePrefix(finalImageRequest.characterIds);
+        // Feed character design portraits as img2img references so FLUX.2-klein
+        // uses them as anchors during generation (not just face-swap after).
+        // Merge with user turn attachments, character portraits take priority.
+        const seen = new Set<string>();
+        const anchorRefs = [...faceSources, ...(opts.attachments || [])]
+          .filter((ref) => {
+            if (seen.has(ref.id)) return false;
+            seen.add(ref.id);
+            return true;
+          })
+          .slice(0, MAX_IMAGE_REFERENCES);
         void requestGeneratedImage(
           finalId,
           appearancePrefix + finalImageRequest.prompt,
-          referencesForImage(undefined, opts.attachments || []),
+          anchorRefs,
           finalImageRequest,
           faceSources,
         );
@@ -1355,17 +1366,31 @@ export default function Home() {
                             <ImageBeat
                               message={message}
                               status={imageStatus[message.id]}
-                              onRetry={() =>
-                                message.imageRequest?.prompt &&
+                              onRetry={() => {
+                                if (!message.imageRequest?.prompt) return;
+                                const retrySources = faceSourcesForImage(
+                                  message.imageRequest.characterIds,
+                                );
+                                const retrySeen = new Set<string>();
+                                const retryRefs = [
+                                  ...retrySources,
+                                  ...lastUserAttachments,
+                                ]
+                                  .filter((ref) => {
+                                    if (retrySeen.has(ref.id)) return false;
+                                    retrySeen.add(ref.id);
+                                    return true;
+                                  })
+                                  .slice(0, MAX_IMAGE_REFERENCES);
                                 requestGeneratedImage(
                                   message.id,
                                   characterAppearancePrefix(message.imageRequest.characterIds) +
                                     message.imageRequest.prompt,
-                                  referencesForImage(undefined, lastUserAttachments),
+                                  retryRefs,
                                   message.imageRequest,
-                                  faceSourcesForImage(message.imageRequest.characterIds),
-                                )
-                              }
+                                  retrySources,
+                                );
+                              }}
                             />
                           )}
                           <MessageActions
