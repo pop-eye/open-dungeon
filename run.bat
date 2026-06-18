@@ -68,13 +68,13 @@ if "%START_OLLAMA%"=="1" (
 
 REM ---- 2. Image server (optional) ----------------------------------------
 if "%START_IMAGES%"=="1" (
-  echo [run] Starting image server (FLUX worker)...
+  echo [run] Starting image server [FLUX worker]...
   start "Open Dungeon - Image server" cmd /k "npm run image:server"
 )
 
 REM ---- 3. TTS server (optional) ------------------------------------------
 if "%START_TTS%"=="1" (
-  echo [run] Starting TTS server (Kokoro)...
+  echo [run] Starting TTS server [Kokoro]...
   start "Open Dungeon - TTS server" cmd /k "npm run tts:server"
 )
 
