@@ -55,16 +55,27 @@ if not exist "node_modules" (
 )
 
 REM ---- 1. Ollama ----------------------------------------------------------
-if "%START_OLLAMA%"=="1" (
-  where ollama >nul 2>nul
-  if errorlevel 1 (
-    echo [run] Ollama not found on PATH - skipping. Install from https://ollama.com/download
-    echo [run] Text generation will not work until Ollama is running.
-  ) else (
-    echo [run] Starting Ollama...
-    start "Open Dungeon - Ollama" cmd /k "ollama serve"
-  )
+if "%START_OLLAMA%"=="1" call :start_ollama
+goto after_ollama
+
+:start_ollama
+REM Already listening on 11434? The Windows Ollama app/service runs it for you.
+netstat -ano | findstr ":11434" >nul 2>nul
+if not errorlevel 1 (
+  echo [run] Ollama already running on port 11434 - reusing it.
+  goto :eof
 )
+where ollama >nul 2>nul
+if errorlevel 1 (
+  echo [run] Ollama not found on PATH - skipping. Install from https://ollama.com/download
+  echo [run] Text generation will not work until Ollama is running.
+  goto :eof
+)
+echo [run] Starting Ollama...
+start "Open Dungeon - Ollama" cmd /k "ollama serve"
+goto :eof
+
+:after_ollama
 
 REM ---- 2. Image server (optional) ----------------------------------------
 if "%START_IMAGES%"=="1" (
