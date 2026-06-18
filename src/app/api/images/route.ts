@@ -55,7 +55,15 @@ export async function POST(request: Request) {
   // Anchor every image to the story's fixed art-direction so the look stays
   // consistent turn to turn, regardless of how the per-scene prompt is worded.
   const style = body.style.trim();
-  const prompt = style ? `${body.prompt.trim()}. Style: ${style}` : body.prompt;
+  const styledPrompt = style ? `${body.prompt.trim()}. Style: ${style}` : body.prompt.trim();
+
+  // FLUX weights the beginning of the prompt most heavily. Prepend a hard
+  // no-text directive so speech bubbles, watermarks, and invented glyphs
+  // don't appear. The trailing "no text" in the style suffix is kept as a
+  // secondary signal but is not sufficient on its own.
+  const prompt =
+    "NO TEXT, NO WORDS, NO LETTERS, NO SPEECH BUBBLES, NO CAPTIONS, NO WATERMARKS, NO WRITING OF ANY KIND. " +
+    styledPrompt;
 
   try {
     const upstream = await fetch(`${workerUrl.replace(/\/$/, "")}/generate`, {
