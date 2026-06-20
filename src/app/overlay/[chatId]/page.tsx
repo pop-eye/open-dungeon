@@ -204,9 +204,9 @@ export default function OverlayPage({ params }: { params: Promise<{ chatId: stri
       </div>
 
       {/* ── Right column: image + vote + commands ─────────────────────────── */}
-      <div className="flex flex-col w-[42%] h-full px-6 py-8 gap-4 overflow-hidden">
-        {/* Scene image — fixed portion of the column height */}
-        <div className="flex-none flex items-start" style={{ maxHeight: "38%" }}>
+      <div className="flex flex-col w-[42%] h-full px-6 py-8 gap-3 overflow-hidden">
+        {/* Scene image — grows to fill all space above bottom panels */}
+        <div className="flex-1 min-h-0 flex items-start">
           {latestImage ? (
             <img
               src={latestImage}
@@ -220,22 +220,16 @@ export default function OverlayPage({ params }: { params: Promise<{ chatId: stri
           )}
         </div>
 
-        {/* Vote panel */}
+        {/* Vote panel — pinned above commands */}
         {vote && (
-          <div className="bg-black/50 border border-white/10 rounded-lg p-4 backdrop-blur-sm">
-            <div className="flex items-center justify-between mb-3">
-              <p className="text-[10px] tracking-widest text-purple-400 uppercase font-semibold">
-                Chat Vote
-              </p>
+          <div className="flex-none bg-black/50 border border-white/10 rounded-lg p-3 backdrop-blur-sm">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-[10px] tracking-widest text-purple-400 uppercase font-semibold">Chat Vote</p>
               <div className="flex items-center gap-2">
                 <span className="text-xs text-gray-400">
                   {vote.uniqueVoters ?? 0} voter{(vote.uniqueVoters ?? 0) !== 1 ? "s" : ""}
                 </span>
-                <span
-                  className={`text-sm font-mono font-bold tabular-nums ${
-                    (vote.remainingSeconds ?? 0) <= 5 ? "text-red-400" : "text-green-400"
-                  }`}
-                >
+                <span className={`text-sm font-mono font-bold tabular-nums ${(vote.remainingSeconds ?? 0) <= 5 ? "text-red-400" : "text-green-400"}`}>
                   {vote.remainingSeconds ?? 0}s
                 </span>
               </div>
@@ -247,20 +241,19 @@ export default function OverlayPage({ params }: { params: Promise<{ chatId: stri
                 <VoteMeter key={i} entry={entry} maxVotes={(vote.entries ?? [])[0]?.votes ?? 1} />
               ))
             )}
-            <p className="text-[10px] text-gray-500 mt-2">Use !do, !say, or !story to vote</p>
           </div>
         )}
 
-        {/* Commands reference */}
+        {/* Commands reference — pinned to bottom */}
         {showCommands && (
-          <div className="bg-black/50 border border-white/10 rounded-lg p-4 backdrop-blur-sm overflow-hidden flex-shrink-0">
-            <p className="text-[28px] text-amber-300 font-semibold mb-3">
+          <div className="flex-none bg-black/50 border border-white/10 rounded-lg p-3 backdrop-blur-sm">
+            <p className="text-[28px] text-amber-300 font-semibold leading-tight">
               🧪 Just testing — give it a try!
             </p>
-            <p className="text-[30px] tracking-widest text-purple-400 uppercase font-semibold mb-1">
+            <p className="text-[30px] tracking-widest text-purple-400 uppercase font-semibold leading-tight">
               Commands
             </p>
-            <table className="w-full border-collapse text-[36px]">
+            <table className="w-full border-collapse text-[36px] leading-tight">
               <tbody>
                 {[
                   ["!do <action>", "perform an action"],
@@ -269,8 +262,8 @@ export default function OverlayPage({ params }: { params: Promise<{ chatId: stri
                   ["!odhelp", "all commands"],
                 ].map(([cmd, desc]) => (
                   <tr key={cmd}>
-                    <td className="pr-3 py-1 text-purple-300 font-mono whitespace-nowrap">{cmd}</td>
-                    <td className="py-1 text-gray-400">{desc}</td>
+                    <td className="pr-3 text-purple-300 font-mono whitespace-nowrap" style={{ paddingTop: "2px", paddingBottom: "2px" }}>{cmd}</td>
+                    <td className="text-gray-400" style={{ paddingTop: "2px", paddingBottom: "2px" }}>{desc}</td>
                   </tr>
                 ))}
               </tbody>
