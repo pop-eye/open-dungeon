@@ -16,9 +16,14 @@ const setSchema = z.object({
   secret: z.string(),
 });
 
-export async function GET() {
+export async function GET(request: Request) {
   const state = getStreamState();
-  const chat = state.activeChatId ? getChat(state.activeChatId) : null;
+  // Allow the overlay to pass ?chatId=... directly so it works without the
+  // bot having run !chat first (e.g. the streamer just opened the overlay URL).
+  const url = new URL(request.url);
+  const chatIdParam = url.searchParams.get("chatId") || null;
+  const resolvedChatId = state.activeChatId || chatIdParam;
+  const chat = resolvedChatId ? getChat(resolvedChatId) : null;
 
   const lastMessages = chat?.messages.slice(-5).map((m) => ({
     id: m.id,
@@ -30,7 +35,7 @@ export async function GET() {
   })) ?? [];
 
   return Response.json({
-    activeChatId: state.activeChatId,
+    activeChatId: resolvedChatId,
     chatTitle: chat?.title ?? null,
     lastTurnAt: state.lastTurnAt,
     lastTurnSummary: state.lastTurnSummary,

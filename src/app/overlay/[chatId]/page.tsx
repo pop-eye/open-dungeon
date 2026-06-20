@@ -145,7 +145,7 @@ export default function OverlayPage({ params }: { params: Promise<{ chatId: stri
     async function poll() {
       try {
         const [statusRes, voteRes] = await Promise.all([
-          fetch(`/api/stream/status`, { cache: "no-store" }),
+          fetch(`/api/stream/status?chatId=${encodeURIComponent(chatId)}`, { cache: "no-store" }),
           fetch(`/api/stream/vote`, { cache: "no-store" }),
         ]);
 
