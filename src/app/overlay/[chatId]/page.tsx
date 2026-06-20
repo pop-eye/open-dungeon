@@ -204,9 +204,9 @@ export default function OverlayPage({ params }: { params: Promise<{ chatId: stri
       </div>
 
       {/* ── Right column: image + vote + commands ─────────────────────────── */}
-      <div className="flex flex-col w-[42%] h-full px-6 py-8 gap-4">
-        {/* Scene image — takes available space at top */}
-        <div className="flex-1 flex items-start">
+      <div className="flex flex-col w-[42%] h-full px-6 py-8 gap-4 overflow-hidden">
+        {/* Scene image — fixed portion of the column height */}
+        <div className="flex-none flex items-start" style={{ maxHeight: "38%" }}>
           {latestImage ? (
             <img
               src={latestImage}
@@ -253,7 +253,7 @@ export default function OverlayPage({ params }: { params: Promise<{ chatId: stri
 
         {/* Commands reference */}
         {showCommands && (
-          <div className="bg-black/50 border border-white/10 rounded-lg p-4 backdrop-blur-sm">
+          <div className="bg-black/50 border border-white/10 rounded-lg p-4 backdrop-blur-sm overflow-hidden flex-shrink-0">
             <p className="text-[28px] text-amber-300 font-semibold mb-3">
               🧪 Just testing — give it a try!
             </p>
