@@ -257,10 +257,10 @@ export default function OverlayPage({ params }: { params: Promise<{ chatId: stri
             <p className="text-[28px] text-amber-300 font-semibold mb-3">
               🧪 Just testing — give it a try!
             </p>
-            <p className="text-[20px] tracking-widest text-purple-400 uppercase font-semibold mb-1">
+            <p className="text-[30px] tracking-widest text-purple-400 uppercase font-semibold mb-1">
               Commands
             </p>
-            <table className="w-full border-collapse text-[24px]" style={{ lineHeight: "5px" }}>
+            <table className="w-full border-collapse text-[36px]" style={{ lineHeight: "5px" }}>
               <tbody>
                 {[
                   ["!do <action>", "perform an action"],
