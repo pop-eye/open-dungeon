@@ -5,6 +5,7 @@
  *
  * Designed to be added as a Browser Source in OBS.
  * Shows the latest story passages and live voting state.
+ * Content is anchored to the bottom — new passages push older ones up.
  *
  * URL params:
  *   ?transparent=1  — remove background (use with chroma key or OBS Browser Source
@@ -79,9 +80,7 @@ function VoteMeter({ entry, maxVotes }: { entry: VoteEntry; maxVotes: number }) 
 
 function StoryPassage({ message, isLatest }: { message: Message; isLatest: boolean }) {
   return (
-    <div
-      className={`mb-4 transition-opacity duration-700 ${isLatest ? "opacity-100" : "opacity-60"}`}
-    >
+    <div className={`mb-4 transition-opacity duration-700 ${isLatest ? "opacity-100" : "opacity-50"}`}>
       {message.role === "user" ? (
         <p className="text-purple-300 font-medium mb-1 text-sm tracking-wide uppercase opacity-70">
           Action
@@ -100,7 +99,7 @@ function StoryPassage({ message, isLatest }: { message: Message; isLatest: boole
             ? "text-purple-200 italic"
             : isLatest
               ? "text-white"
-              : "text-gray-300"
+              : "text-gray-400"
         }`}
         style={{ fontFamily: '"Georgia", "Times New Roman", serif' }}
       >
@@ -145,7 +144,7 @@ export default function OverlayPage({ params }: { params: Promise<{ chatId: stri
     async function poll() {
       try {
         const [statusRes, voteRes] = await Promise.all([
-          fetch(`/api/stream/status?chatId=${encodeURIComponent(chatId)}`, { cache: "no-store" }),
+          fetch(`/api/stream/status?chatId=${encodeURIComponent(chatId!)}`, { cache: "no-store" }),
           fetch(`/api/stream/vote`, { cache: "no-store" }),
         ]);
 
@@ -159,7 +158,9 @@ export default function OverlayPage({ params }: { params: Promise<{ chatId: stri
 
         setStatus({
           chatTitle: statusData.chatTitle,
-          messages: (statusData.messages || []).filter((m: Message) => m.role === "assistant" || m.role === "user"),
+          messages: (statusData.messages || []).filter(
+            (m: Message) => m.role === "assistant" || m.role === "user",
+          ),
           voting: voteData.active ? voteData.vote : null,
         });
         setError(null);
@@ -180,11 +181,14 @@ export default function OverlayPage({ params }: { params: Promise<{ chatId: stri
   const vote = status?.voting;
 
   return (
+    // Full viewport, content pinned to the bottom so new passages push up
     <div
-      className={`min-h-screen font-sans ${transparent ? "bg-transparent" : "bg-black/90"} text-white relative`}
+      className={`fixed inset-0 flex flex-col justify-end font-sans ${
+        transparent ? "bg-transparent" : "bg-black/90"
+      } text-white`}
       style={{ fontSize: `${fontSize}px` }}
     >
-      <div className="max-w-2xl mx-auto p-6 pt-8">
+      <div className="w-full max-w-2xl mx-auto px-6 pb-6">
         {/* Story title */}
         {status?.chatTitle && (
           <p className="text-xs tracking-widest text-purple-400 uppercase mb-4 opacity-70">
@@ -207,39 +211,11 @@ export default function OverlayPage({ params }: { params: Promise<{ chatId: stri
           <StoryPassage key={m.id} message={m} isLatest={m.id === latestId} />
         ))}
 
-        {/* Commands reference panel */}
-        {showCommands && (
-          <div className="fixed bottom-4 right-4 bg-black/70 border border-white/10 rounded-lg p-3 text-xs text-gray-300 backdrop-blur-sm min-w-[180px]">
-            <p className="text-purple-400 uppercase tracking-widest text-[10px] mb-2 font-semibold">
-              Commands
-            </p>
-            <table className="w-full border-collapse">
-              <tbody>
-                {[
-                  ["!do", "perform an action"],
-                  ["!say", "say something"],
-                  ["!story", "story directive"],
-                  ["!continue", "advance story"],
-                  ["!vote", "open a vote (mod)"],
-                  ["!odhelp", "show all commands"],
-                ].map(([cmd, desc]) => (
-                  <tr key={cmd}>
-                    <td className="pr-2 py-0.5 text-purple-300 font-mono whitespace-nowrap">{cmd}</td>
-                    <td className="py-0.5 text-gray-400">{desc}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-
         {/* Voting panel */}
         {vote && (
-          <div className="mt-6 border-t border-white/10 pt-4">
+          <div className="mt-4 border-t border-white/10 pt-4">
             <div className="flex items-center justify-between mb-3">
-              <p className="text-xs tracking-widest text-purple-400 uppercase">
-                Chat Vote
-              </p>
+              <p className="text-xs tracking-widest text-purple-400 uppercase">Chat Vote</p>
               <div className="flex items-center gap-2">
                 <span className="text-xs text-gray-400">
                   {vote.uniqueVoters ?? 0} voter{(vote.uniqueVoters ?? 0) !== 1 ? "s" : ""}
@@ -255,22 +231,42 @@ export default function OverlayPage({ params }: { params: Promise<{ chatId: stri
             </div>
             <div>
               {(vote.entries ?? []).slice(0, 5).map((entry, i) => (
-                <VoteMeter
-                  key={i}
-                  entry={entry}
-                  maxVotes={(vote.entries ?? [])[0]?.votes ?? 1}
-                />
+                <VoteMeter key={i} entry={entry} maxVotes={(vote.entries ?? [])[0]?.votes ?? 1} />
               ))}
               {(vote.entries ?? []).length === 0 && (
                 <p className="text-gray-500 text-xs italic">No votes yet…</p>
               )}
             </div>
-            <p className="text-xs text-gray-500 mt-2">
-              Use !do, !say, or !story in chat to vote
-            </p>
+            <p className="text-xs text-gray-500 mt-2">Use !do, !say, or !story in chat to vote</p>
           </div>
         )}
       </div>
+
+      {/* Commands reference panel — fixed bottom-right */}
+      {showCommands && (
+        <div className="fixed bottom-4 right-4 bg-black/70 border border-white/10 rounded-lg p-3 text-xs text-gray-300 backdrop-blur-sm min-w-[180px]">
+          <p className="text-purple-400 uppercase tracking-widest text-[10px] mb-2 font-semibold">
+            Commands
+          </p>
+          <table className="w-full border-collapse">
+            <tbody>
+              {[
+                ["!do", "perform an action"],
+                ["!say", "say something"],
+                ["!story", "story directive"],
+                ["!continue", "advance story"],
+                ["!vote", "open a vote (mod)"],
+                ["!odhelp", "show all commands"],
+              ].map(([cmd, desc]) => (
+                <tr key={cmd}>
+                  <td className="pr-2 py-0.5 text-purple-300 font-mono whitespace-nowrap">{cmd}</td>
+                  <td className="py-0.5 text-gray-400">{desc}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
