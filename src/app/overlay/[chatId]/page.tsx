@@ -89,18 +89,23 @@ function StoryPassage({
   return (
     <div className={`mb-4 transition-opacity duration-700 ${isLatest ? "opacity-100" : "opacity-45"}`}>
       {message.role === "user" && (
-        <p className="text-purple-300 text-xs font-semibold tracking-widest uppercase mb-1 opacity-70">
-          {isLatest && submittedBy ? `@${submittedBy}` : "Action"}
+        <p
+          className={`leading-relaxed text-purple-200 italic`}
+          style={{ fontFamily: '"Georgia", "Times New Roman", serif' }}
+        >
+          {isLatest && submittedBy ? (
+            <><span className="text-purple-400 font-semibold not-italic">{submittedBy}: </span>{message.content}</>
+          ) : message.content}
         </p>
       )}
-      <p
-        className={`leading-relaxed ${
-          message.role === "user" ? "text-purple-200 italic" : isLatest ? "text-white" : "text-gray-400"
-        }`}
-        style={{ fontFamily: '"Georgia", "Times New Roman", serif' }}
-      >
-        {message.content}
-      </p>
+      {message.role !== "user" && (
+        <p
+          className={`leading-relaxed ${isLatest ? "text-white" : "text-gray-400"}`}
+          style={{ fontFamily: '"Georgia", "Times New Roman", serif' }}
+        >
+          {message.content}
+        </p>
+      )}
     </div>
   );
 }
