@@ -39,6 +39,7 @@ export async function GET(request: Request) {
     chatTitle: chat?.title ?? null,
     lastTurnAt: state.lastTurnAt,
     lastTurnSummary: state.lastTurnSummary,
+    lastSubmittedBy: state.lastSubmittedBy,
     voting: state.voting ? serializeVoteState(state.voting) : null,
     messages: lastMessages,
   });

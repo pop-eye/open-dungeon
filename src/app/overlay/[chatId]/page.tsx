@@ -45,6 +45,7 @@ type StatusPayload = {
   chatTitle: string | null;
   messages: Message[];
   voting: VoteState | null;
+  lastSubmittedBy: string | null;
 };
 
 function VoteMeter({ entry, maxVotes }: { entry: VoteEntry; maxVotes: number }) {
@@ -76,12 +77,20 @@ function VoteMeter({ entry, maxVotes }: { entry: VoteEntry; maxVotes: number }) 
   );
 }
 
-function StoryPassage({ message, isLatest }: { message: Message; isLatest: boolean }) {
+function StoryPassage({
+  message,
+  isLatest,
+  submittedBy,
+}: {
+  message: Message;
+  isLatest: boolean;
+  submittedBy?: string | null;
+}) {
   return (
     <div className={`mb-4 transition-opacity duration-700 ${isLatest ? "opacity-100" : "opacity-45"}`}>
       {message.role === "user" && (
         <p className="text-purple-300 text-xs font-semibold tracking-widest uppercase mb-1 opacity-70">
-          Action
+          {isLatest && submittedBy ? `@${submittedBy}` : "Action"}
         </p>
       )}
       <p
@@ -108,7 +117,7 @@ export default function OverlayPage({ params }: { params: Promise<{ chatId: stri
   const [transparent, setTransparent] = useState(false);
   const [passages, setPassages] = useState(3);
   const [pollInterval, setPollInterval] = useState(3000);
-  const [fontSize, setFontSize] = useState(18);
+  const [fontSize, setFontSize] = useState(36);
   const [showCommands, setShowCommands] = useState(true);
 
   useEffect(() => {
@@ -142,6 +151,7 @@ export default function OverlayPage({ params }: { params: Promise<{ chatId: stri
             (m: Message) => m.role === "assistant" || m.role === "user",
           ),
           voting: voteData.active ? voteData.vote : null,
+          lastSubmittedBy: statusData.lastSubmittedBy ?? null,
         });
         setError(null);
       } catch (e) {
@@ -156,6 +166,7 @@ export default function OverlayPage({ params }: { params: Promise<{ chatId: stri
 
   const messages = (status?.messages ?? []).slice(-passages);
   const latestId = messages.findLast((m) => m.role === "assistant")?.id;
+  const latestUserId = messages.findLast((m) => m.role === "user")?.id;
   const latestImage = messages.findLast((m) => m.imageUrl)?.imageUrl ?? null;
   const vote = status?.voting;
 
@@ -183,7 +194,12 @@ export default function OverlayPage({ params }: { params: Promise<{ chatId: stri
         )}
 
         {messages.map((m) => (
-          <StoryPassage key={m.id} message={m} isLatest={m.id === latestId} />
+          <StoryPassage
+            key={m.id}
+            message={m}
+            isLatest={m.id === latestId}
+            submittedBy={m.id === latestUserId ? status?.lastSubmittedBy : null}
+          />
         ))}
       </div>
 

@@ -24,6 +24,7 @@ const schema = z.object({
   chatId: z.string().optional(),
   command: z.enum(["do", "say", "story", "continue"]).default("do"),
   text: z.string().max(500).default(""),
+  username: z.string().optional(),
   secret: z.string(),
 });
 
@@ -165,6 +166,7 @@ export async function POST(request: Request) {
     const state = getStreamState();
     state.lastTurnAt = Date.now();
     state.lastTurnSummary = result.content.slice(0, 200) || null;
+    state.lastSubmittedBy = body.username?.trim() || null;
 
     return Response.json({
       ok: true,

@@ -27,6 +27,7 @@ export type StreamState = {
   voting: VoteState | null;
   lastTurnAt: number | null;
   lastTurnSummary: string | null;
+  lastSubmittedBy: string | null;
   /** Tracks when each donor last triggered a story event (username → timestamp ms). */
   donationCooldowns: Map<string, number>;
   /** Timestamp of the last processed donation event. */
@@ -43,6 +44,7 @@ function makeState(): StreamState {
     voting: null,
     lastTurnAt: null,
     lastTurnSummary: null,
+    lastSubmittedBy: null,
     donationCooldowns: new Map(),
     lastDonationAt: null,
   };

@@ -158,7 +158,7 @@ async function closeVoteAuto(client, channel) {
       client.say(channel, "🗳️ Vote closed — no votes were cast.");
       return;
     }
-    const { command, text, votes } = result.winner;
+    const { command, text, votes, username: winner } = result.winner;
     const display =
       command === "do"
         ? `Do: "${text}"`
@@ -169,17 +169,17 @@ async function closeVoteAuto(client, channel) {
             : `Story: "${text}"`;
     client.say(channel, `🗳️ Vote closed! Submitting (${votes} vote${votes !== 1 ? "s" : ""}): ${display}`);
 
-    // Submit the winning turn
-    await submitTurn(client, channel, command, text);
+    // Submit the winning turn, crediting the top voter
+    await submitTurn(client, channel, command, text, winner);
     voteCooldownUntil = Date.now() + cfg.voteCooldownSeconds * 1000;
   } catch (err) {
     client.say(channel, `❌ Error closing vote: ${err.message}`);
   }
 }
 
-async function submitTurn(client, channel, command, text) {
+async function submitTurn(client, channel, command, text, username) {
   try {
-    const result = await apiPost("/api/stream/turn", { command, text });
+    const result = await apiPost("/api/stream/turn", { command, text, username });
     // Announce a snippet of the response in chat (truncated to Twitch's 500 char limit)
     if (result.response?.content) {
       const snippet = result.response.content.replace(/\s+/g, " ").trim().slice(0, 220);
@@ -290,7 +290,7 @@ async function handleCommand(client, channel, tags, message) {
 
   lastSubmitAt = Date.now();
   client.say(channel, `📝 Submitting ${command} from @${username}…`);
-  await submitTurn(client, channel, command, text);
+  await submitTurn(client, channel, command, text, username);
 }
 
 // ── Connect ───────────────────────────────────────────────────────────────────
