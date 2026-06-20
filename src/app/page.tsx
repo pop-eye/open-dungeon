@@ -502,14 +502,16 @@ export default function Home() {
   // image generation fire even when the browser didn't submit the turn.
   // Tracks which message IDs have already been handled locally.
   const handledMessageIds = useRef<Set<string>>(new Set());
+  const busyRef = useRef(false);
+  useEffect(() => { busyRef.current = busy; }, [busy]);
   useEffect(() => {
-    if (!selectedChatId || busy) return;
+    if (!selectedChatId) return;
 
     // Seed handled set from current messages so we don't re-narrate history.
     for (const m of messages) handledMessageIds.current.add(m.id);
 
     const interval = window.setInterval(async () => {
-      if (busy) return;
+      if (busyRef.current) return; // skip tick while a local turn is in flight
       try {
         const res = await fetch(`/api/chats/${selectedChatId}`, { cache: "no-store" });
         if (!res.ok) return;
@@ -578,7 +580,7 @@ export default function Home() {
 
     return () => window.clearInterval(interval);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedChatId, busy]);
+  }, [selectedChatId]);
 
   async function handleFiles(files: FileList | null) {
     if (!files?.length) {
