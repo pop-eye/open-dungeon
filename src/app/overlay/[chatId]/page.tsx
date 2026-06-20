@@ -260,7 +260,7 @@ export default function OverlayPage({ params }: { params: Promise<{ chatId: stri
             <p className="text-[30px] tracking-widest text-purple-400 uppercase font-semibold mb-1">
               Commands
             </p>
-            <table className="w-full border-collapse text-[36px]" style={{ lineHeight: "5px" }}>
+            <table className="w-full border-collapse text-[36px]">
               <tbody>
                 {[
                   ["!do <action>", "perform an action"],
@@ -269,8 +269,8 @@ export default function OverlayPage({ params }: { params: Promise<{ chatId: stri
                   ["!odhelp", "all commands"],
                 ].map(([cmd, desc]) => (
                   <tr key={cmd}>
-                    <td className="pr-3 text-purple-300 font-mono whitespace-nowrap" style={{ paddingTop: "5px", paddingBottom: "5px" }}>{cmd}</td>
-                    <td className="text-gray-400" style={{ paddingTop: "5px", paddingBottom: "5px" }}>{desc}</td>
+                    <td className="pr-3 py-1 text-purple-300 font-mono whitespace-nowrap">{cmd}</td>
+                    <td className="py-1 text-gray-400">{desc}</td>
                   </tr>
                 ))}
               </tbody>
