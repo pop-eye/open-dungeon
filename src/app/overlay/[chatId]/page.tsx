@@ -109,7 +109,7 @@ export default function OverlayPage({ params }: { params: Promise<{ chatId: stri
   const [passages, setPassages] = useState(3);
   const [pollInterval, setPollInterval] = useState(3000);
   const [fontSize, setFontSize] = useState(18);
-  const [showCommands, setShowCommands] = useState(false);
+  const [showCommands, setShowCommands] = useState(true);
 
   useEffect(() => {
     const sp = new URLSearchParams(window.location.search);
@@ -117,7 +117,7 @@ export default function OverlayPage({ params }: { params: Promise<{ chatId: stri
     if (sp.get("passages")) setPassages(Math.max(1, Math.min(10, parseInt(sp.get("passages")!, 10))));
     if (sp.get("poll")) setPollInterval(Math.max(1000, parseInt(sp.get("poll")!, 10)));
     if (sp.get("fontSize")) setFontSize(Math.max(12, Math.min(36, parseInt(sp.get("fontSize")!, 10))));
-    if (sp.get("commands") === "1") setShowCommands(true);
+    if (sp.get("commands") === "0") setShowCommands(false);
   }, []);
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);

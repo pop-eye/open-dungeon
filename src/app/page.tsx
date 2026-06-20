@@ -498,6 +498,88 @@ export default function Home() {
     endRef.current?.scrollIntoView({ block: "end" });
   }, [messages, busy, imageStatus]);
 
+  // Poll for messages submitted externally (e.g. Twitch bot) so TTS and
+  // image generation fire even when the browser didn't submit the turn.
+  // Tracks which message IDs have already been handled locally.
+  const handledMessageIds = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!selectedChatId || busy) return;
+
+    // Seed handled set from current messages so we don't re-narrate history.
+    for (const m of messages) handledMessageIds.current.add(m.id);
+
+    const interval = window.setInterval(async () => {
+      if (busy) return;
+      try {
+        const res = await fetch(`/api/chats/${selectedChatId}`, { cache: "no-store" });
+        if (!res.ok) return;
+        const payload = (await res.json()) as ChatResponse;
+        const incoming = payload.chat.messages;
+
+        const newMessages = incoming.filter((m) => !handledMessageIds.current.has(m.id));
+        if (!newMessages.length) return;
+
+        // Merge new messages into state without triggering a full reload.
+        setMessages(incoming);
+        for (const m of newMessages) handledMessageIds.current.add(m.id);
+
+        // Handle each new assistant message: TTS + image generation.
+        for (const m of newMessages) {
+          if (m.role !== "assistant") continue;
+
+          // TTS — narrate the passage.
+          narration.speakWhole(m.content);
+
+          // Image generation — fire if the model requested one.
+          if (m.imageRequest?.needed && m.imageRequest.prompt && !m.generatedImage) {
+            const needsDesign = (m.imageRequest.characterIds ?? [])
+              .map((id) => characters.find((c) => c.id === id))
+              .filter((c): c is StoryCharacter => !!c && !!c.details.trim() && !c.portrait);
+
+            const freshPortraits = new Map<string, Attachment>();
+            if (needsDesign.length) {
+              const results = await Promise.allSettled(
+                needsDesign.map((c) =>
+                  generateCharacterDesign(c.id, c.details).then((p) => ({ id: c.id, portrait: p })),
+                ),
+              );
+              for (const r of results) {
+                if (r.status === "fulfilled" && r.value.portrait) {
+                  freshPortraits.set(r.value.id, r.value.portrait);
+                }
+              }
+            }
+
+            const faceSources = (m.imageRequest.characterIds ?? []).flatMap((id) => {
+              const fresh = freshPortraits.get(id);
+              if (fresh) return [fresh];
+              const existing = characters.find((c) => c.id === id)?.portrait;
+              return existing ? [existing] : [];
+            });
+
+            const seen = new Set<string>();
+            const anchorRefs = [...faceSources]
+              .filter((ref) => { if (seen.has(ref.id)) return false; seen.add(ref.id); return true; })
+              .slice(0, MAX_IMAGE_REFERENCES);
+
+            void requestGeneratedImage(
+              m.id,
+              characterAppearancePrefix(m.imageRequest.characterIds) + m.imageRequest.prompt,
+              anchorRefs,
+              m.imageRequest,
+              faceSources,
+            );
+          }
+        }
+      } catch {
+        // silently ignore poll errors
+      }
+    }, 4000);
+
+    return () => window.clearInterval(interval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedChatId, busy]);
+
   async function handleFiles(files: FileList | null) {
     if (!files?.length) {
       return;
