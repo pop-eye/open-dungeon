@@ -3,17 +3,16 @@
 /**
  * OBS Overlay — /overlay/[chatId]
  *
- * Designed to be added as a Browser Source in OBS.
- * Shows the latest story passages and live voting state.
- * Content is anchored to the bottom — new passages push older ones up.
+ * 16:9 two-column layout designed for a 1920×1080 browser source.
+ *   Left  (~60%): story passages, anchored to the bottom
+ *   Right (~40%): latest scene image, vote panel, commands reference
  *
  * URL params:
- *   ?transparent=1  — remove background (use with chroma key or OBS Browser Source
- *                     "Allow transparency" checked)
- *   ?passages=N     — number of recent passages to show (default 3)
- *   ?poll=N         — polling interval in ms (default 3000)
- *   ?fontSize=N     — base font size in px (default 18)
- *   ?commands=1     — show the commands panel in the bottom-right corner
+ *   ?transparent=1  — remove background (check "Allow transparency" in OBS)
+ *   ?passages=N     — recent passages to show (default 3)
+ *   ?poll=N         — polling interval ms (default 3000)
+ *   ?fontSize=N     — base font size px (default 18)
+ *   ?commands=1     — show viewer commands panel in the right column
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -35,8 +34,7 @@ type VoteEntry = {
 };
 
 type VoteState = {
-  active: boolean;
-  remainingSeconds?: number;
+  remainingSeconds: number;
   windowSeconds?: number;
   totalVotes?: number;
   uniqueVoters?: number;
@@ -46,7 +44,7 @@ type VoteState = {
 type StatusPayload = {
   chatTitle: string | null;
   messages: Message[];
-  voting: (Omit<VoteState, "active"> & { remainingSeconds: number }) | null;
+  voting: VoteState | null;
 };
 
 function VoteMeter({ entry, maxVotes }: { entry: VoteEntry; maxVotes: number }) {
@@ -61,7 +59,7 @@ function VoteMeter({ entry, maxVotes }: { entry: VoteEntry; maxVotes: number }) 
           : `Story: ${entry.text}`;
 
   return (
-    <div className="mb-1">
+    <div className="mb-1.5">
       <div className="flex justify-between text-xs mb-0.5 opacity-80">
         <span className="truncate max-w-[80%]">{label}</span>
         <span className="ml-2 shrink-0">
@@ -80,26 +78,15 @@ function VoteMeter({ entry, maxVotes }: { entry: VoteEntry; maxVotes: number }) 
 
 function StoryPassage({ message, isLatest }: { message: Message; isLatest: boolean }) {
   return (
-    <div className={`mb-4 transition-opacity duration-700 ${isLatest ? "opacity-100" : "opacity-50"}`}>
-      {message.role === "user" ? (
-        <p className="text-purple-300 font-medium mb-1 text-sm tracking-wide uppercase opacity-70">
+    <div className={`mb-4 transition-opacity duration-700 ${isLatest ? "opacity-100" : "opacity-45"}`}>
+      {message.role === "user" && (
+        <p className="text-purple-300 text-xs font-semibold tracking-widest uppercase mb-1 opacity-70">
           Action
         </p>
-      ) : null}
-      {message.imageUrl && (
-        <img
-          src={message.imageUrl}
-          alt=""
-          className="rounded-md mb-2 max-h-64 w-full object-contain"
-        />
       )}
       <p
         className={`leading-relaxed ${
-          message.role === "user"
-            ? "text-purple-200 italic"
-            : isLatest
-              ? "text-white"
-              : "text-gray-400"
+          message.role === "user" ? "text-purple-200 italic" : isLatest ? "text-white" : "text-gray-400"
         }`}
         style={{ fontFamily: '"Georgia", "Times New Roman", serif' }}
       >
@@ -114,12 +101,10 @@ export default function OverlayPage({ params }: { params: Promise<{ chatId: stri
   const [status, setStatus] = useState<StatusPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Resolve async params
   useEffect(() => {
     params.then((p) => setChatId(p.chatId));
   }, [params]);
 
-  // URL query params
   const [transparent, setTransparent] = useState(false);
   const [passages, setPassages] = useState(3);
   const [pollInterval, setPollInterval] = useState(3000);
@@ -131,11 +116,10 @@ export default function OverlayPage({ params }: { params: Promise<{ chatId: stri
     if (sp.get("transparent") === "1") setTransparent(true);
     if (sp.get("passages")) setPassages(Math.max(1, Math.min(10, parseInt(sp.get("passages")!, 10))));
     if (sp.get("poll")) setPollInterval(Math.max(1000, parseInt(sp.get("poll")!, 10)));
-    if (sp.get("fontSize")) setFontSize(Math.max(12, Math.min(40, parseInt(sp.get("fontSize")!, 10))));
+    if (sp.get("fontSize")) setFontSize(Math.max(12, Math.min(36, parseInt(sp.get("fontSize")!, 10))));
     if (sp.get("commands") === "1") setShowCommands(true);
   }, []);
 
-  // Polling
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -147,11 +131,7 @@ export default function OverlayPage({ params }: { params: Promise<{ chatId: stri
           fetch(`/api/stream/status?chatId=${encodeURIComponent(chatId!)}`, { cache: "no-store" }),
           fetch(`/api/stream/vote`, { cache: "no-store" }),
         ]);
-
-        if (!statusRes.ok) {
-          setError(`Status ${statusRes.status}`);
-          return;
-        }
+        if (!statusRes.ok) { setError(`Status ${statusRes.status}`); return; }
 
         const statusData = await statusRes.json();
         const voteData = voteRes.ok ? await voteRes.json() : { active: false };
@@ -171,51 +151,66 @@ export default function OverlayPage({ params }: { params: Promise<{ chatId: stri
 
     poll();
     timerRef.current = setInterval(poll, pollInterval);
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
+    return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [chatId, pollInterval]);
 
   const messages = (status?.messages ?? []).slice(-passages);
   const latestId = messages.findLast((m) => m.role === "assistant")?.id;
+  const latestImage = messages.findLast((m) => m.imageUrl)?.imageUrl ?? null;
   const vote = status?.voting;
 
   return (
-    // Full viewport, content pinned to the bottom so new passages push up
     <div
-      className={`fixed inset-0 flex flex-col justify-end font-sans ${
-        transparent ? "bg-transparent" : "bg-black/90"
-      } text-white`}
+      className={`fixed inset-0 flex ${transparent ? "bg-transparent" : "bg-black/85"} text-white`}
       style={{ fontSize: `${fontSize}px` }}
     >
-      <div className="w-full max-w-2xl mx-auto px-6 pb-6">
-        {/* Story title */}
+      {/* ── Left column: story text, anchored to bottom ───────────────────── */}
+      <div className="flex flex-col justify-end w-[58%] h-full px-8 pb-8">
         {status?.chatTitle && (
-          <p className="text-xs tracking-widest text-purple-400 uppercase mb-4 opacity-70">
+          <p className="text-[10px] tracking-widest text-purple-400 uppercase mb-4 opacity-60">
             {status.chatTitle}
           </p>
         )}
 
-        {/* Error state */}
         {error && (
-          <div className="text-red-400 text-sm mb-4 p-2 border border-red-400/30 rounded">
-            Connection error: {error}
+          <div className="text-red-400 text-xs mb-3 p-2 border border-red-400/30 rounded">
+            {error}
           </div>
         )}
 
-        {/* Story passages */}
         {messages.length === 0 && !error && (
           <p className="text-gray-500 italic text-sm">Waiting for story to begin…</p>
         )}
+
         {messages.map((m) => (
           <StoryPassage key={m.id} message={m} isLatest={m.id === latestId} />
         ))}
+      </div>
 
-        {/* Voting panel */}
+      {/* ── Right column: image + vote + commands ─────────────────────────── */}
+      <div className="flex flex-col w-[42%] h-full px-6 py-8 gap-4">
+        {/* Scene image — takes available space at top */}
+        <div className="flex-1 flex items-start">
+          {latestImage ? (
+            <img
+              src={latestImage}
+              alt=""
+              className="w-full rounded-lg object-contain max-h-full shadow-2xl"
+            />
+          ) : (
+            <div className="w-full aspect-square rounded-lg bg-white/5 border border-white/10 flex items-center justify-center">
+              <span className="text-gray-600 text-xs">No image yet</span>
+            </div>
+          )}
+        </div>
+
+        {/* Vote panel */}
         {vote && (
-          <div className="mt-4 border-t border-white/10 pt-4">
+          <div className="bg-black/50 border border-white/10 rounded-lg p-4 backdrop-blur-sm">
             <div className="flex items-center justify-between mb-3">
-              <p className="text-xs tracking-widest text-purple-400 uppercase">Chat Vote</p>
+              <p className="text-[10px] tracking-widest text-purple-400 uppercase font-semibold">
+                Chat Vote
+              </p>
               <div className="flex items-center gap-2">
                 <span className="text-xs text-gray-400">
                   {vote.uniqueVoters ?? 0} voter{(vote.uniqueVoters ?? 0) !== 1 ? "s" : ""}
@@ -229,44 +224,41 @@ export default function OverlayPage({ params }: { params: Promise<{ chatId: stri
                 </span>
               </div>
             </div>
-            <div>
-              {(vote.entries ?? []).slice(0, 5).map((entry, i) => (
+            {(vote.entries ?? []).length === 0 ? (
+              <p className="text-gray-500 text-xs italic">No votes yet…</p>
+            ) : (
+              (vote.entries ?? []).slice(0, 5).map((entry, i) => (
                 <VoteMeter key={i} entry={entry} maxVotes={(vote.entries ?? [])[0]?.votes ?? 1} />
-              ))}
-              {(vote.entries ?? []).length === 0 && (
-                <p className="text-gray-500 text-xs italic">No votes yet…</p>
-              )}
-            </div>
-            <p className="text-xs text-gray-500 mt-2">Use !do, !say, or !story in chat to vote</p>
+              ))
+            )}
+            <p className="text-[10px] text-gray-500 mt-2">Use !do, !say, or !story to vote</p>
+          </div>
+        )}
+
+        {/* Commands reference */}
+        {showCommands && (
+          <div className="bg-black/50 border border-white/10 rounded-lg p-4 backdrop-blur-sm">
+            <p className="text-[10px] tracking-widest text-purple-400 uppercase font-semibold mb-2">
+              Commands
+            </p>
+            <table className="w-full border-collapse text-xs">
+              <tbody>
+                {[
+                  ["!do <action>", "perform an action"],
+                  ["!say <words>", "say something"],
+                  ["!continue", "advance story"],
+                  ["!odhelp", "all commands"],
+                ].map(([cmd, desc]) => (
+                  <tr key={cmd}>
+                    <td className="pr-3 py-0.5 text-purple-300 font-mono whitespace-nowrap">{cmd}</td>
+                    <td className="py-0.5 text-gray-400">{desc}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </div>
-
-      {/* Commands reference panel — fixed bottom-right */}
-      {showCommands && (
-        <div className="fixed bottom-4 right-4 bg-black/70 border border-white/10 rounded-lg p-3 text-xs text-gray-300 backdrop-blur-sm min-w-[180px]">
-          <p className="text-purple-400 uppercase tracking-widest text-[10px] mb-2 font-semibold">
-            Commands
-          </p>
-          <table className="w-full border-collapse">
-            <tbody>
-              {[
-                ["!do", "perform an action"],
-                ["!say", "say something"],
-                ["!story", "story directive"],
-                ["!continue", "advance story"],
-                ["!vote", "open a vote (mod)"],
-                ["!odhelp", "show all commands"],
-              ].map(([cmd, desc]) => (
-                <tr key={cmd}>
-                  <td className="pr-2 py-0.5 text-purple-300 font-mono whitespace-nowrap">{cmd}</td>
-                  <td className="py-0.5 text-gray-400">{desc}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
     </div>
   );
 }
