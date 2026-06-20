@@ -1219,13 +1219,18 @@ export default function Home() {
               <h1 className="truncate text-balance text-base font-semibold text-stone-100">
                 {activeChat?.title || "Open Dungeon"}
               </h1>
-              <p className="truncate text-xs text-stone-500">
-                {settings.textProvider === "local"
-                  ? `${
-                      LOCAL_TEXT_MODELS.find((model) => model.id === settings.localTextModel)
-                        ?.label ?? "Local model"
-                    } · on-device`
-                  : `${settings.customModel || "Connected server"} · your server`}
+              <p className="flex items-center gap-2 truncate text-xs text-stone-500">
+                <span className="truncate">
+                  {settings.textProvider === "local"
+                    ? `${
+                        LOCAL_TEXT_MODELS.find((model) => model.id === settings.localTextModel)
+                          ?.label ?? "Local model"
+                      } · on-device`
+                    : `${settings.customModel || "Connected server"} · your server`}
+                </span>
+                {selectedChatId && (
+                  <ChatIdBadge chatId={selectedChatId} />
+                )}
               </p>
             </div>
           </div>
@@ -3262,6 +3267,26 @@ function ImageBeat({
         </div>
       )}
     </div>
+  );
+}
+
+function ChatIdBadge({ chatId }: { chatId: string }) {
+  const [copied, setCopied] = useState(false);
+  const short = chatId.slice(0, 8);
+  return (
+    <button
+      type="button"
+      title={`Chat ID: ${chatId} — click to copy`}
+      onClick={() => {
+        void navigator.clipboard.writeText(chatId).then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        });
+      }}
+      className="shrink-0 rounded border border-stone-700 bg-stone-900 px-1.5 py-0.5 font-mono text-[10px] text-stone-400 hover:border-amber-300/40 hover:text-amber-200 transition-colors"
+    >
+      {copied ? "copied!" : `#${short}`}
+    </button>
   );
 }
 

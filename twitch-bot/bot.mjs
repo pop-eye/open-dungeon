@@ -230,7 +230,19 @@ async function handleCommand(client, channel, tags, message) {
   if (cmd === "!chat") {
     if (!isMod(tags)) return;
     const chatId = rest.trim();
-    if (!chatId) { client.say(channel, "Usage: !chat <chatId>"); return; }
+    // !chat latest — auto-connect to the most recently updated story
+    if (!chatId || chatId === "latest") {
+      try {
+        const data = await apiGet("/api/chats");
+        const latest = data.chats?.[0];
+        if (!latest) { client.say(channel, "❌ No stories found. Create one in the app first."); return; }
+        await apiPost("/api/stream/status", { activeChatId: latest.id });
+        client.say(channel, `✅ Connected to most recent story: "${latest.title}" (${latest.id.slice(0, 8)})`);
+      } catch (err) {
+        client.say(channel, `❌ Could not fetch chats: ${err.message}`);
+      }
+      return;
+    }
     await apiPost("/api/stream/status", { activeChatId: chatId });
     client.say(channel, `✅ Active chat set to: ${chatId}`);
     return;
@@ -240,7 +252,7 @@ async function handleCommand(client, channel, tags, message) {
     client.say(
       channel,
       "📖 Open Dungeon commands: !do <action> | !say <words> | !story <directive> | !continue | " +
-        "(mods) !vote [seconds] | !endvote | !cancelvote | !chat <id>",
+        "(mods) !vote [seconds] | !endvote | !cancelvote | !chat latest",
     );
     return;
   }
