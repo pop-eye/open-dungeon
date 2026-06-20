@@ -254,6 +254,9 @@ export default function OverlayPage({ params }: { params: Promise<{ chatId: stri
         {/* Commands reference */}
         {showCommands && (
           <div className="bg-black/50 border border-white/10 rounded-lg p-4 backdrop-blur-sm">
+            <p className="text-[28px] text-amber-300 font-semibold mb-3">
+              🧪 Just testing — give it a try!
+            </p>
             <p className="text-[30px] tracking-widest text-purple-400 uppercase font-semibold mb-2">
               Commands
             </p>
