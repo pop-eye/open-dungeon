@@ -254,10 +254,10 @@ export default function OverlayPage({ params }: { params: Promise<{ chatId: stri
         {/* Commands reference */}
         {showCommands && (
           <div className="bg-black/50 border border-white/10 rounded-lg p-4 backdrop-blur-sm">
-            <p className="text-[10px] tracking-widest text-purple-400 uppercase font-semibold mb-2">
+            <p className="text-[30px] tracking-widest text-purple-400 uppercase font-semibold mb-2">
               Commands
             </p>
-            <table className="w-full border-collapse text-xs">
+            <table className="w-full border-collapse text-[36px]">
               <tbody>
                 {[
                   ["!do <action>", "perform an action"],
@@ -266,8 +266,8 @@ export default function OverlayPage({ params }: { params: Promise<{ chatId: stri
                   ["!odhelp", "all commands"],
                 ].map(([cmd, desc]) => (
                   <tr key={cmd}>
-                    <td className="pr-3 py-0.5 text-purple-300 font-mono whitespace-nowrap">{cmd}</td>
-                    <td className="py-0.5 text-gray-400">{desc}</td>
+                    <td className="pr-3 py-1 text-purple-300 font-mono whitespace-nowrap">{cmd}</td>
+                    <td className="py-1 text-gray-400">{desc}</td>
                   </tr>
                 ))}
               </tbody>
