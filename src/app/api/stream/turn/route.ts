@@ -43,6 +43,46 @@ function formatInput(command: string, text: string): string {
   }
 }
 
+// The story route responds with NDJSON (one JSON object per line).
+// Consume the stream and reconstruct the final content + imageRequest from
+// the "done" event so the bot can echo a snippet in chat.
+async function drainStoryStream(
+  upstream: Response,
+): Promise<{ content: string; imageRequest?: unknown }> {
+  if (!upstream.body) return { content: "" };
+
+  const reader = upstream.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let content = "";
+  let imageRequest: unknown;
+
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let nl: number;
+    while ((nl = buffer.indexOf("\n")) !== -1) {
+      const line = buffer.slice(0, nl).trim();
+      buffer = buffer.slice(nl + 1);
+      if (!line) continue;
+      try {
+        const event = JSON.parse(line) as Record<string, unknown>;
+        if (event.type === "done") {
+          if (typeof event.content === "string") content = event.content;
+          if (event.imageRequest !== undefined) imageRequest = event.imageRequest;
+        } else if (event.type === "delta" && typeof event.text === "string") {
+          content += event.text;
+        }
+      } catch {
+        // ignore malformed lines
+      }
+    }
+  }
+
+  return { content, imageRequest };
+}
+
 export async function POST(request: Request) {
   const secret = serverEnv("STREAM_API_SECRET");
   if (!secret) {
@@ -103,22 +143,28 @@ export async function POST(request: Request) {
       body: JSON.stringify(storyPayload),
     });
 
-    const result = await upstream.json();
-
     if (!upstream.ok) {
+      const detail = await upstream.json().catch(() => ({}));
       return Response.json(
-        { error: "Story generation failed.", detail: result },
+        { error: "Story generation failed.", detail },
         { status: upstream.status },
       );
     }
 
-    // Update stream state for the overlay
+    const contentType = upstream.headers.get("content-type") || "";
+    let result: { content: string; imageRequest?: unknown };
+
+    if (contentType.includes("application/x-ndjson")) {
+      result = await drainStoryStream(upstream);
+    } else {
+      const json = (await upstream.json()) as { content?: string; imageRequest?: unknown };
+      result = { content: json.content ?? "", imageRequest: json.imageRequest };
+    }
+
+    // Update stream state so the overlay picks up the new passage.
     const state = getStreamState();
     state.lastTurnAt = Date.now();
-    state.lastTurnSummary =
-      typeof result.content === "string"
-        ? result.content.slice(0, 200)
-        : null;
+    state.lastTurnSummary = result.content.slice(0, 200) || null;
 
     return Response.json({
       ok: true,

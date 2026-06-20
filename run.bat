@@ -11,12 +11,14 @@ REM    1. Ollama          - local text generation        (port 11434)
 REM    2. Next.js app     - the web UI                    (http://localhost:3000)
 REM    3. Image server    - FLUX.2-klein image worker     (port 7869, optional)
 REM    4. TTS server      - Kokoro voice narration        (optional)
+REM    5. Twitch bot      - viewer chat commands          (optional, --stream)
 REM
 REM  Usage:
 REM    run.bat              start app + Ollama + image server + TTS
+REM    run.bat --stream     also start the Twitch chat bot
 REM    run.bat --no-images  skip the FLUX image worker
 REM    run.bat --no-tts     skip the Kokoro TTS server
-REM    run.bat --app-only   only Ollama + the Next.js app (text play)
+REM    run.bat --app-only   only Ollama + the Next.js app (text only, no images/voice/bot)
 REM ============================================================================
 
 setlocal
@@ -26,12 +28,14 @@ REM ---- Parse flags --------------------------------------------------------
 set START_IMAGES=1
 set START_TTS=1
 set START_OLLAMA=1
+set START_BOT=0
 
 :parse
 if "%~1"=="" goto parsed
 if /i "%~1"=="--no-images" set START_IMAGES=0
 if /i "%~1"=="--no-tts"    set START_TTS=0
-if /i "%~1"=="--app-only"  ( set START_IMAGES=0 & set START_TTS=0 )
+if /i "%~1"=="--stream"    set START_BOT=1
+if /i "%~1"=="--app-only"  ( set START_IMAGES=0 & set START_TTS=0 & set START_BOT=0 )
 shift
 goto parse
 :parsed
@@ -89,7 +93,31 @@ if "%START_TTS%"=="1" (
   start "Open Dungeon - TTS server" cmd /k "npm run tts:server"
 )
 
-REM ---- 4. Next.js app -----------------------------------------------------
+REM ---- 4. Twitch bot (optional) ------------------------------------------
+if "%START_BOT%"=="1" call :start_bot
+goto after_bot
+
+:start_bot
+if not exist "twitch-bot\.env" (
+  echo [run] twitch-bot\.env not found.
+  echo [run] Copy twitch-bot\.env.example to twitch-bot\.env and fill in your credentials.
+  echo [run] Skipping Twitch bot - run .\run.bat --stream again once configured.
+  goto :eof
+)
+REM Check STREAM_API_SECRET is set somewhere
+findstr /i "STREAM_API_SECRET" .env.local >nul 2>nul
+if errorlevel 1 (
+  echo [run] WARNING: STREAM_API_SECRET not found in .env.local
+  echo [run] Add it to .env.local - the bot uses it to authenticate with the app.
+  echo [run] Example:  STREAM_API_SECRET=some-long-random-string
+)
+echo [run] Starting Twitch bot...
+start "Open Dungeon - Twitch bot" cmd /k "npm run stream:bot"
+goto :eof
+
+:after_bot
+
+REM ---- 5. Next.js app -----------------------------------------------------
 echo [run] Starting the app on http://localhost:3000 ...
 start "Open Dungeon - App" cmd /k "npm run dev"
 
@@ -97,9 +125,19 @@ echo.
 echo [run] All requested services are launching in their own windows.
 echo [run] Open http://localhost:3000 in your browser once the app window says "Ready".
 echo.
+if "%START_BOT%"=="1" (
+  echo [run] Twitch streaming tips:
+  echo [run]   - Create a story, copy its ID from the URL ^(?chat=...^)
+  echo [run]   - In Twitch chat, type:  !chat ^<chatId^>  to connect the bot
+  echo [run]   - Add OBS browser source: http://localhost:3000/overlay/^<chatId^>?transparent=1
+  echo [run]   - Viewers use: !do ^<action^>  !say ^<words^>  !continue
+  echo [run]   - Mods use:    !vote [seconds]  !endvote  !cancelvote
+  echo.
+)
 echo [run] Tips:
 echo [run]   - First image request downloads ~7-10 GB of model weights.
 echo [run]   - Pull a text model once with:  ollama pull gemma4:12b-it-qat
+echo [run]   - For streaming, run:  .\run.bat --stream
 echo [run]   - Close any service window to stop just that service.
 echo.
 endlocal
